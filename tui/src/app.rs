@@ -9,6 +9,7 @@ use cassis_core::matcher::{self, parse_query};
 use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
 use cassis_core::scanner::ScanProgress;
 use cassis_core::store::LibraryStore;
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -208,6 +209,9 @@ pub struct App {
     /// True when `g` was pressed and we expect a digit to activate a playlist.
     pending_g: bool,
 
+    /// Last mouse click (time, item index) for double-click detection.
+    last_mouse_click: Option<(Instant, usize)>,
+
     /// Live scan progress; `None` when no scan is running.
     scan_progress: Option<Arc<ScanProgress>>,
 
@@ -252,6 +256,7 @@ impl App {
             smart_playlists: Vec::new(),
             playback: None,
             pending_g: false,
+            last_mouse_click: None,
             scan_progress: None,
             dirty: true,
             col_widths: ColumnWidths::default(),
@@ -710,6 +715,164 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// Handle a mouse event. `size` is the current terminal rect, used for
+    /// hit-testing against the same layout the renderer computes.
+    pub fn handle_mouse(
+        &mut self,
+        mouse: crossterm::event::MouseEvent,
+        c: &mut MutexGuard<'_, PlayerController>,
+        size: Rect,
+    ) -> bool {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        // Overlays: any left-click closes them (same as key behavior).
+        if self.details.is_some() && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.details = None;
+            return false;
+        }
+        if self.help && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.help = false;
+            return false;
+        }
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // tabs + search
+                Constraint::Min(0),    // list
+                Constraint::Length(5), // now playing + progress + status
+            ])
+            .split(size);
+
+        let col = mouse.column;
+        let row = mouse.row;
+
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.move_selection(1),
+            MouseEventKind::ScrollUp => self.move_selection(-1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if row < chunks[0].bottom() {
+                    self.handle_tab_click(col, row, chunks[0]);
+                } else if row >= chunks[1].top() && row < chunks[1].bottom() {
+                    self.handle_list_click(row, chunks[1], c);
+                } else if row >= chunks[2].top() && row < chunks[2].bottom() {
+                    self.handle_footer_click(col, row, chunks[2]);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Click on a tab title in the header area.
+    fn handle_tab_click(&mut self, col: u16, row: u16, header_area: Rect) {
+        // Tabs occupy the first 60 columns of the header.
+        let header_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(60), Constraint::Min(0)])
+            .split(header_area);
+        let tab_area = header_cols[0];
+
+        // Tab titles are on the first inner line of the block (below top border).
+        if row != tab_area.y + 1 {
+            return;
+        }
+
+        let inner_x = (tab_area.x + 1) as usize; // left border
+        let titles = ["tracks", "albums", "artists", "queue", "playlists", "files"];
+        let mut x = inner_x;
+        for (i, title) in titles.iter().enumerate() {
+            let w = title.len();
+            if col as usize >= x && (col as usize) < x + w {
+                self.tab = Tab::ALL[i];
+                self.expanded = None;
+                self.dirty = true;
+                return;
+            }
+            x += w;
+        }
+    }
+
+    /// Click on a row in the list area: select the item, or activate on
+    /// double-click.
+    fn handle_list_click(
+        &mut self,
+        row: u16,
+        area: Rect,
+        c: &mut MutexGuard<'_, PlayerController>,
+    ) {
+        // Must be inside the top and bottom borders.
+        if row <= area.top() || row >= area.bottom() {
+            return;
+        }
+        let content_row = (row - area.top() - 1) as usize;
+        let visible = area.height.saturating_sub(2) as usize; // borders
+        let total = self.current_total();
+        if total == 0 || visible == 0 {
+            return;
+        }
+
+        // Compute the scroll offset the same way center_select does in the
+        // renderer, so the row-to-item mapping is consistent.
+        let selected = self.current_selection();
+        let half = visible / 2;
+        let max_offset = total.saturating_sub(visible);
+        let offset = selected.saturating_sub(half).min(max_offset);
+
+        let item_index = offset + content_row;
+        if item_index >= total {
+            return;
+        }
+
+        self.set_selection(item_index);
+
+        // Double-click activates (play) the item.
+        let now = Instant::now();
+        if let Some((t, idx)) = self.last_mouse_click
+            && idx == item_index
+            && now.duration_since(t) < Duration::from_millis(400)
+        {
+            self.activate(c);
+            self.last_mouse_click = None;
+            return;
+        }
+        self.last_mouse_click = Some((now, item_index));
+    }
+
+    /// Click on the progress bar in the footer: seek to the clicked position.
+    fn handle_footer_click(&mut self, col: u16, row: u16, area: Rect) {
+        // Footer: 4-row now-playing block + 1-row status.
+        let footer_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Length(1)])
+            .split(area);
+
+        // Gauge is on the second inner line of the now-playing block.
+        let np_inner = footer_chunks[0].inner(Margin::new(1, 1));
+        let gauge_row = np_inner.y + 1;
+        if row != gauge_row {
+            return;
+        }
+
+        let Some(pb) = &self.playback else { return };
+        let Some(t) = &self.now_playing else { return };
+        if t.duration_secs == 0 {
+            return;
+        }
+
+        let gauge_w = np_inner.width as usize;
+        if gauge_w == 0 {
+            return;
+        }
+        let pos = (col as usize)
+            .saturating_sub(np_inner.x as usize)
+            .min(gauge_w - 1);
+        let fraction = pos as f64 / gauge_w as f64;
+        let target_ms = (fraction * t.duration_secs as f64 * 1000.0) as u64;
+        pb.request_seek(target_ms);
+        self.status = format!("seek: {}", fmt_duration((target_ms / 1000) as u32));
     }
 
     fn invalidate_list(&mut self) {

@@ -16,7 +16,7 @@ use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
 use cassis_core::store::LibraryStore;
 use crossterm::{
     ExecutableCommand,
-    event::{self, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -78,6 +78,7 @@ fn main() -> Result<(), io::Error> {
 
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
+    io::stdout().execute(EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let result = run(&mut terminal, &mut app, &controller);
@@ -89,6 +90,7 @@ fn main() -> Result<(), io::Error> {
 
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
+    io::stdout().execute(DisableMouseCapture)?;
     result
 }
 
@@ -110,15 +112,22 @@ fn run(
 
         terminal.draw(|f| ui::draw(f, app))?;
 
-        if event::poll(Duration::from_millis(30))?
-            && let Event::Key(key) = event::read()?
-        {
-            let quit = {
-                let mut c = controller.lock().unwrap();
-                app.handle_key(key, &mut c)
-            };
-            if quit {
-                return Ok(());
+        if event::poll(Duration::from_millis(30))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    let quit = {
+                        let mut c = controller.lock().unwrap();
+                        app.handle_key(key, &mut c)
+                    };
+                    if quit {
+                        return Ok(());
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    let mut c = controller.lock().unwrap();
+                    app.handle_mouse(mouse, &mut c, size.into());
+                }
+                _ => {}
             }
         }
     }

@@ -664,6 +664,12 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     for (key, desc) in bindings {
         text.push_str(&format!("{key:<20} {desc}\n"));
     }
+    text.push_str("\nmouse:\n");
+    text.push_str("  click tab        switch tabs\n");
+    text.push_str("  click list       select (double-click: play)\n");
+    text.push_str("  scroll           move selection\n");
+    text.push_str("  click progress   seek\n");
+    text.push_str("  shift+drag       terminal text selection (copy)\n");
     text.push_str("\nsearch syntax:\n");
     let syntax: [(&str, &str); 12] = [
         ("free text", "matches title, artist, album"),
