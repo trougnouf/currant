@@ -403,8 +403,14 @@ impl App {
 
         match key.code {
             KeyCode::Esc => return true,
-            KeyCode::Tab => self.tab = self.tab.next(),
-            KeyCode::BackTab => self.tab = self.tab.prev(),
+            KeyCode::Tab => {
+                self.tab = self.tab.next();
+                self.dirty = true;
+            }
+            KeyCode::BackTab => {
+                self.tab = self.tab.prev();
+                self.dirty = true;
+            }
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-20),

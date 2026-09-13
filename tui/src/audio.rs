@@ -80,6 +80,14 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
             }
             sink.play();
 
+            // When no track is current but we should be playing, pull the
+            // next track from the queue (explicit or dynamic).
+            let current = if current.is_none() {
+                controller.lock().unwrap().determine_next_track()
+            } else {
+                current
+            };
+
             // A new track was chosen (play/skip/previous).
             if current != playing_id {
                 if let Some(prev) = playing_id.take() {
