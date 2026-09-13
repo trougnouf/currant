@@ -11,7 +11,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{
+    Block, Borders, Clear, Gauge, List, ListItem, ListState, Padding, Paragraph, Tabs,
+};
 
 /// Color palette for the TUI.
 mod theme {
@@ -578,7 +580,8 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .title("help")
         .title_style(Style::default().fg(theme::TITLE))
-        .border_style(Style::default().fg(theme::POPUP_BORDER));
+        .border_style(Style::default().fg(theme::POPUP_BORDER))
+        .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::from(
         "\
 /search            filter the current tab (Esc to leave)
@@ -603,14 +606,14 @@ Ctrl+C / Esc      quit
 
 search syntax:
   free text           matches title, artist, album
-  ar:pink            artist contains 'pink'
-  al:=kind of blue   album equals exactly
-  t:-love            title does not contain 'love'
-  #jazz              genre contains 'jazz'
-  year:>=1990        year >= 1990
-  *>=4               rating >= 4 stars
-  ~>5m               duration > 5 minutes
-  p:0                play count = 0 (never played)
+  ar:pink / artist:pink   artist contains 'pink'
+  al:=kind of blue / album:=kind of blue   album equals exactly
+  t:-love / title:-love   title does not contain 'love'
+  #jazz / genre:jazz       genre contains 'jazz'
+  year:>=1990              year >= 1990
+  *>=4 / rating:>=4        rating >= 4 stars
+  ~>5m / length:>5m        duration > 5 minutes
+  p:0 / playcount:0        play count = 0 (never played)
   -term              exclude (NOT)
   a | b              either (OR)
   (a b)              grouping (implicit AND)
@@ -704,6 +707,7 @@ fn draw_details(f: &mut Frame, area: Rect, track: &Track) {
         .borders(Borders::ALL)
         .title("track details (any key to close)")
         .title_style(Style::default().fg(theme::TITLE))
-        .border_style(Style::default().fg(theme::POPUP_BORDER));
+        .border_style(Style::default().fg(theme::POPUP_BORDER))
+        .padding(Padding::new(2, 2, 1, 1));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }

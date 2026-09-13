@@ -9,10 +9,16 @@
 //!   unary    := "-"? primary
 //!   primary  := "(" expr ")" | term
 //!   term     := free_text
-//!             | field ":" value      // field: title/ar/al/g/c/y/d/*/r/p
+//!             | field ":" value      // field prefix (see below)
 //!             | "#" genre            // genre shorthand
 //!             | "*" rating           // rating shorthand
 //!             | "~" duration         // duration shorthand (5m, 180s)
+//!
+//! Field prefixes (short and long forms):
+//!   t / title        ar / artist      al / album
+//!   g / genre        c / comment      y / year
+//!   d / dur / duration / length
+//!   * / r / rating   p / plays / play_count / playcount / count
 //!
 //! Value may carry a leading operator: `>=`, `<=`, `!=`, `>`, `<`, `=`.
 //! The default operator is `contains` for text fields and `eq` for numeric ones.
@@ -541,6 +547,30 @@ mod tests {
         let e = parse_query("*>=4");
         let sql = e.to_sql();
         assert!(sql.where_clause.contains("rating >= ?"));
+    }
+
+    #[test]
+    fn parses_named_field_aliases() {
+        let e = parse_query("rating:>=4");
+        assert!(e.to_sql().where_clause.contains("rating >= ?"));
+
+        let e = parse_query("title:love");
+        assert!(e.to_sql().where_clause.contains("title LIKE ?"));
+
+        let e = parse_query("artist:pink");
+        assert!(e.to_sql().where_clause.contains("artist LIKE ?"));
+
+        let e = parse_query("album:kind");
+        assert!(e.to_sql().where_clause.contains("album LIKE ?"));
+
+        let e = parse_query("genre:jazz");
+        assert!(e.to_sql().where_clause.contains("genre LIKE ?"));
+
+        let e = parse_query("playcount:0");
+        assert!(e.to_sql().where_clause.contains("play_count = ?"));
+
+        let e = parse_query("length:>5m");
+        assert!(e.to_sql().where_clause.contains("duration_secs > ?"));
     }
 
     #[test]

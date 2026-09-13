@@ -87,7 +87,7 @@ impl Field {
             "y" | "year" => Field::Year,
             "d" | "dur" | "duration" | "length" => Field::Duration,
             "*" | "r" | "rating" => Field::Rating,
-            "p" | "plays" | "play_count" | "count" => Field::PlayCount,
+            "p" | "plays" | "play_count" | "playcount" | "count" => Field::PlayCount,
             _ => return None,
         })
     }
