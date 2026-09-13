@@ -605,7 +605,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         .map(|s| match s {
             cassis_core::model::SortPreset::RandomAlbum => "random album",
             cassis_core::model::SortPreset::Random => "random",
-            _ => "ordered",
+            _ => "off",
         })
         .unwrap_or("-");
     let vol = format!("vol: {:0.0}%", app.volume * 100.0);

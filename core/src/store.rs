@@ -355,6 +355,42 @@ impl LibraryStore {
         FilterPage { tracks, total }
     }
 
+    /// Track IDs from the filtered, sorted list. Lighter than `filter` when
+    /// only the ordering is needed (e.g., seeding the play queue).
+    pub fn filter_ids(
+        &self,
+        expr: &matcher::SearchExpr,
+        sort: SortPreset,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<String> {
+        let frag = expr.to_sql();
+        let order = matcher::sort_to_order_by(sort);
+        let conn = self.read_conn();
+        let where_sql = if frag.where_clause.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", frag.where_clause)
+        };
+        let sql = format!("SELECT id FROM tracks {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+        let mut all_params: Vec<&dyn rusqlite::ToSql> = params_as_dyn(&frag.params);
+        let l = limit as i64;
+        let o = offset as i64;
+        all_params.push(&l);
+        all_params.push(&o);
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query(params_from_iter(all_params)) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        rows.mapped(|row| row.get::<_, String>(0))
+            .flatten()
+            .collect()
+    }
+
     /// Random album: pick one album, return its tracks in track order.
     pub fn random_album_tracks(&self, expr: &matcher::SearchExpr) -> Vec<Track> {
         let frag = expr.to_sql();
@@ -384,15 +420,27 @@ impl LibraryStore {
             return Vec::new();
         };
 
-        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
+        // Get tracks from that album, also constrained by the filter so the
+        // continuation never pulls in tracks the user filtered out.
+        let mut track_where = String::from("album = ?");
+        let mut track_params: Vec<SqlParam> = vec![SqlParam::Text(album)];
+        if !frag.where_clause.is_empty() {
+            track_where.push_str(" AND (");
+            track_where.push_str(&frag.where_clause);
+            track_where.push(')');
+            track_params.extend(frag.params);
+        }
+        let sql = format!(
+            "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE album = ?1
-                   ORDER BY track_number, title";
-        let mut stmt = match conn.prepare(sql) {
+             FROM tracks WHERE {track_where}
+             ORDER BY track_number, title"
+        );
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = match stmt.query(rusqlite::params![album]) {
+        let rows = match stmt.query(params_from_iter(params_as_dyn(&track_params))) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
@@ -404,18 +452,36 @@ impl LibraryStore {
     }
 
     /// Remaining tracks of an album that come *after* the given track number,
-    /// in track order. Used to continue an album the user started mid-way.
-    pub fn album_tracks_after(&self, album: &str, after: u32) -> Vec<Track> {
+    /// in track order, constrained by the active filter. Used to continue an
+    /// album the user started mid-way.
+    pub fn album_tracks_after(
+        &self,
+        album: &str,
+        after: u32,
+        expr: &matcher::SearchExpr,
+    ) -> Vec<Track> {
+        let frag = expr.to_sql();
         let conn = self.read_conn();
-        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
+        let mut where_clause = String::from("album = ? AND track_number > ?");
+        let mut params: Vec<SqlParam> =
+            vec![SqlParam::Text(album.into()), SqlParam::Int(after as i64)];
+        if !frag.where_clause.is_empty() {
+            where_clause.push_str(" AND (");
+            where_clause.push_str(&frag.where_clause);
+            where_clause.push(')');
+            params.extend(frag.params);
+        }
+        let sql = format!(
+            "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE album = ?1 AND track_number > ?2
-                   ORDER BY track_number, title";
-        let mut stmt = match conn.prepare(sql) {
+             FROM tracks WHERE {where_clause}
+             ORDER BY track_number, title"
+        );
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = match stmt.query(rusqlite::params![album, after]) {
+        let rows = match stmt.query(params_from_iter(params_as_dyn(&params))) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };

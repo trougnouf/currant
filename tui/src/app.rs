@@ -1105,8 +1105,33 @@ impl App {
         }
         match self.tab {
             Tab::Tracks | Tab::Files => {
+                let list_sort = if self.tab == Tab::Tracks {
+                    self.sort
+                } else {
+                    SortPreset::Path
+                };
+                let expr = parse_query(&self.search);
+                let radio_sort = c.dynamic_sort();
+                let is_radio = matches!(radio_sort, SortPreset::Random | SortPreset::RandomAlbum);
+
                 if let Some(id) = self.selected_track_id(c) {
-                    c.dispatch(PlayerIntent::PlayTrack { id });
+                    if is_radio {
+                        // Radio: play just this track; the dynamic queue
+                        // (constrained to the filter) handles next.
+                        c.set_dynamic_source(expr, radio_sort);
+                        c.dispatch(PlayerIntent::PlayTrack { id });
+                    } else if let Some(pos) = c.store.track_position(&id, &expr, list_sort) {
+                        // Ordered: play the rest of the filtered list from here.
+                        let ids = c.store.filter_ids(&expr, list_sort, u32::MAX, pos as u32);
+                        c.set_dynamic_source(expr, radio_sort);
+                        play_sequence_ids(c, ids);
+                    } else {
+                        // Random list sort has no stable position — play just
+                        // this track. No dynamic refill in ordered mode, so
+                        // Next stops after this track.
+                        c.set_dynamic_source(expr, radio_sort);
+                        c.dispatch(PlayerIntent::PlayTrack { id });
+                    }
                 }
             }
             Tab::Queue => {
@@ -1221,11 +1246,23 @@ impl App {
     fn toggle_radio(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         let next = match c.dynamic_sort() {
             SortPreset::RandomAlbum => SortPreset::Random,
+            SortPreset::Random => {
+                // Turn radio off — use the list sort, but never a random one.
+                if matches!(self.sort, SortPreset::Random | SortPreset::RandomAlbum) {
+                    SortPreset::ArtistAlbumTrack
+                } else {
+                    self.sort
+                }
+            }
             _ => SortPreset::RandomAlbum,
         };
         let expr = parse_query(&self.search);
         c.set_dynamic_source(expr, next);
-        self.status = format!("radio: {}", sort_label(next));
+        self.status = if matches!(next, SortPreset::Random | SortPreset::RandomAlbum) {
+            format!("radio: {}", sort_label(next))
+        } else {
+            "radio: off".into()
+        };
     }
 
     fn show_details(&mut self, c: &MutexGuard<'_, PlayerController>) {
@@ -1265,18 +1302,9 @@ impl App {
                     self.set_selection(pos as usize);
                     self.status = "jumped to playing".into();
                 } else {
-                    // Track not in the filtered set or sort is random —
-                    // clear the search to widen the scope and retry.
-                    self.search.clear();
-                    let expr = parse_query(&self.search);
-                    if let Some(pos) = store.track_position(id, &expr, sort) {
-                        self.invalidate_list();
-                        self.set_selection(pos as usize);
-                        self.status = "jumped to playing".into();
-                    } else {
-                        self.invalidate_list();
-                        self.status = "playing track not in list".into();
-                    }
+                    // Track not in the filtered set (e.g. enqueued from
+                    // another tab) or sort is random — leave the filter intact.
+                    self.status = "playing track not in list".into();
                 }
             }
             Tab::Albums => {
@@ -1390,6 +1418,17 @@ fn play_sequence(c: &mut MutexGuard<'_, PlayerController>, tracks: Vec<Track>) {
                 id: t.id,
                 next: false,
             });
+        }
+    }
+}
+
+/// Play track IDs in order: clear the queue, enqueue them, play the first.
+fn play_sequence_ids(c: &mut MutexGuard<'_, PlayerController>, ids: Vec<String>) {
+    let mut iter = ids.into_iter();
+    if let Some(first) = iter.next() {
+        c.dispatch(PlayerIntent::PlayTrack { id: first });
+        for id in iter {
+            c.dispatch(PlayerIntent::Enqueue { id, next: false });
         }
     }
 }

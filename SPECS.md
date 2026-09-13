@@ -106,9 +106,9 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 ### 4.1. Queue model
 
 *   **Explicit queue** — tracks the user specifically enqueued (play next = front, enqueue = back). Takes priority.
-*   **Dynamic queue** — generated from the active smart playlist / search. Refilled in batches of 50 when empty. Recently played tracks are excluded.
+*   **Dynamic queue** — generated from the active search/filter. Refilled in batches of 50 when empty (random/radio modes only). In ordered mode the queue is not auto-refilled — playback stops when the explicit queue runs out. Recently played tracks are excluded. The active search is synced to the dynamic source when the user plays a track from the tracks/files tab, so Next always stays within the filtered set.
 *   **History** — capped at 200 tracks, for the "previous" button and de-duplication.
-*   **Random album** — when a track starts playing (directly or from the dynamic queue) and the radio is set to random album, the remaining tracks of that track's album play in track order before a random album is picked. If the user enqueues a track, the enqueued track takes over the continuation: the stale dynamic picks from the earlier track's album are cleared when the enqueued track starts, so continuation follows the new track's album. Activated with `R`.
+*   **Radio** — toggled with `R`: random album → random → off. Default is random album. When off, playing a track from the filtered list enqueues the rest of that list in order; Next advances through it and stops at the end. When on (random or random album), the dynamic queue auto-refills from the filtered set.
 
 ### 4.2. Position and seeking
 
@@ -180,7 +180,7 @@ Metadata is read and written by lofty 0.25.
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full) |
 | `s` | cycle sort |
-| `r` `R` | toggle radio (random / random-album) |
+| `r` `R` | toggle radio (random album / random / off) |
 | `p` | play / pause |
 | `n` `>` `.` | next track |
 | `<` `,` | previous track |
