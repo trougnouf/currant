@@ -1,7 +1,7 @@
 # ./tui/Cargo.toml
 [package]
 name = "cassis-tui"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Terminal music player for Cassis."
 license = "GPL-3.0-or-later"
