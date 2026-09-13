@@ -67,6 +67,21 @@ pub enum QueueKind {
     Dynamic,
 }
 
+/// Tracks of an expanded album or artist. `v` toggles in/out.
+#[derive(Debug, Clone)]
+pub struct ExpandedView {
+    pub kind: ExpandKind,
+    pub tracks: Vec<Track>,
+    pub selection: usize,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpandKind {
+    Album,
+    Artist,
+}
+
 /// A windowed cache of tracks so 100k+ libraries stay smooth.
 struct WindowedView {
     offset: usize,
@@ -145,6 +160,9 @@ pub struct App {
     sel_playlists: usize,
     queue_rows: Vec<QueueRow>,
 
+    /// Expanded album/artist view: the selected album/artist's tracks.
+    expanded: Option<ExpandedView>,
+
     // view model rebuilt each refresh
     pub now_playing: Option<Track>,
     pub is_playing: bool,
@@ -186,6 +204,7 @@ impl App {
             sel_queue: 0,
             sel_playlists: 0,
             queue_rows: Vec::new(),
+            expanded: None,
             now_playing: None,
             is_playing: false,
             stop_after: false,
@@ -253,6 +272,11 @@ impl App {
             Tab::Artists => self.refresh_artists(&c.store, &expr),
             Tab::Queue => self.refresh_queue(c),
             Tab::Playlists => self.refresh_playlists(),
+        }
+        // Collapse expanded view if the underlying album/artist list was
+        // invalidated (new search, sort change, etc.).
+        if self.dirty {
+            self.expanded = None;
         }
         self.dirty = false;
     }
@@ -369,6 +393,10 @@ impl App {
         (&self.smart_playlists, self.sel_playlists)
     }
 
+    pub fn expanded_view(&self) -> Option<&ExpandedView> {
+        self.expanded.as_ref()
+    }
+
     // --- input ---
 
     /// Handle a key. Returns true to quit. `c` is the locked controller.
@@ -415,6 +443,7 @@ impl App {
                     self.invalidate_list();
                     self.reset_selection();
                 }
+                KeyCode::Char('j') => self.jump_to_playing(),
                 _ => {}
             }
             return false;
@@ -443,10 +472,12 @@ impl App {
             KeyCode::Esc => return true,
             KeyCode::Tab => {
                 self.tab = self.tab.next();
+                self.expanded = None;
                 self.dirty = true;
             }
             KeyCode::BackTab => {
                 self.tab = self.tab.prev();
+                self.expanded = None;
                 self.dirty = true;
             }
             KeyCode::Up => self.move_selection(-1),
@@ -484,6 +515,7 @@ impl App {
             KeyCode::Char('m') => self.set_radio(c, self.sort),
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Char('d') => self.show_details(c),
+            KeyCode::Char('v') => self.toggle_expand(c),
             KeyCode::Char('P') => {
                 let name = if self.search.is_empty() {
                     format!("playlist {}", self.smart_playlists.len() + 1)
@@ -531,6 +563,10 @@ impl App {
     }
 
     fn reset_selection(&mut self) {
+        if let Some(e) = &mut self.expanded {
+            e.selection = 0;
+            return;
+        }
         match self.tab {
             Tab::Tracks => self.tracks.selection = 0,
             Tab::Files => self.files.selection = 0,
@@ -542,6 +578,9 @@ impl App {
     }
 
     fn current_total(&self) -> usize {
+        if self.expanded.is_some() {
+            return self.expanded.as_ref().map(|e| e.tracks.len()).unwrap_or(0);
+        }
         match self.tab {
             Tab::Tracks => self.tracks.total as usize,
             Tab::Files => self.files.total as usize,
@@ -553,6 +592,9 @@ impl App {
     }
 
     fn current_selection(&self) -> usize {
+        if self.expanded.is_some() {
+            return self.expanded.as_ref().map(|e| e.selection).unwrap_or(0);
+        }
         match self.tab {
             Tab::Tracks => self.tracks.selection,
             Tab::Files => self.files.selection,
@@ -566,6 +608,10 @@ impl App {
     fn set_selection(&mut self, i: usize) {
         let max = self.current_total().saturating_sub(1);
         let i = i.min(max);
+        if let Some(e) = &mut self.expanded {
+            e.selection = i;
+            return;
+        }
         match self.tab {
             Tab::Tracks => self.tracks.selection = i,
             Tab::Files => self.files.selection = i,
@@ -593,6 +639,9 @@ impl App {
     }
 
     fn selected_track_id(&self, c: &MutexGuard<'_, PlayerController>) -> Option<String> {
+        if let Some(e) = &self.expanded {
+            return e.tracks.get(e.selection).map(|t| t.id.clone());
+        }
         match self.tab {
             Tab::Tracks => self
                 .tracks
@@ -626,6 +675,14 @@ impl App {
     }
 
     fn activate(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
+        if let Some(e) = &self.expanded {
+            // Expanded: play the selected individual track.
+            if let Some(id) = self.selected_track_id(c) {
+                c.dispatch(PlayerIntent::PlayTrack { id });
+                self.status = format!("playing: {}", e.label);
+            }
+            return;
+        }
         match self.tab {
             Tab::Tracks | Tab::Files => {
                 if let Some(id) = self.selected_track_id(c) {
@@ -662,6 +719,13 @@ impl App {
     }
 
     fn enqueue_selected(&mut self, c: &mut MutexGuard<'_, PlayerController>, next: bool) {
+        if self.expanded.is_some() {
+            if let Some(id) = self.selected_track_id(c) {
+                c.dispatch(PlayerIntent::Enqueue { id, next });
+                self.status = if next { "play next" } else { "queued" }.into();
+            }
+            return;
+        }
         match self.tab {
             Tab::Tracks | Tab::Files => {
                 if let Some(id) = self.selected_track_id(c) {
@@ -737,6 +801,98 @@ impl App {
     fn show_details(&mut self, c: &MutexGuard<'_, PlayerController>) {
         if let Some(id) = self.selected_track_id(c) {
             self.details = c.store.get_track(&id);
+        }
+    }
+
+    fn jump_to_playing(&mut self) {
+        let Some(np) = &self.now_playing else {
+            self.status = "nothing playing".into();
+            return;
+        };
+        let id = &np.id;
+        match self.tab {
+            Tab::Tracks | Tab::Files => {
+                // Search within the loaded window first; if not found,
+                // invalidate and let the user scroll to it.
+                let view = if self.tab == Tab::Tracks {
+                    &self.tracks
+                } else {
+                    &self.files
+                };
+                if let Some(idx) = view.items.iter().position(|t| &t.id == id) {
+                    self.set_selection(view.offset + idx);
+                    self.status = "jumped to playing".into();
+                } else {
+                    // Not in the current window — clear the search to ensure
+                    // the track is reachable, then select by id lookup.
+                    self.search.clear();
+                    self.invalidate_list();
+                    self.status = "cleared search to find playing track".into();
+                }
+            }
+            Tab::Albums => {
+                if let Some(idx) = self
+                    .albums
+                    .iter()
+                    .position(|a| a.artist == np.album_artist && a.album == np.album)
+                {
+                    self.sel_albums = idx;
+                    self.expanded = None;
+                    self.status = "jumped to playing album".into();
+                }
+            }
+            Tab::Artists => {
+                if let Some(idx) = self.artists.iter().position(|a| a.name == np.artist) {
+                    self.sel_artists = idx;
+                    self.expanded = None;
+                    self.status = "jumped to playing artist".into();
+                }
+            }
+            Tab::Queue => {
+                if let Some(idx) = self.queue_rows.iter().position(|r| r.id == *id) {
+                    self.sel_queue = idx;
+                    self.status = "jumped to playing in queue".into();
+                }
+            }
+            Tab::Playlists => {}
+        }
+    }
+
+    fn toggle_expand(&mut self, c: &MutexGuard<'_, PlayerController>) {
+        // If already expanded, collapse.
+        if self.expanded.is_some() {
+            self.expanded = None;
+            self.status.clear();
+            return;
+        }
+        match self.tab {
+            Tab::Albums => {
+                if let Some(a) = self.albums.get(self.sel_albums).cloned() {
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
+                    let label = format!("{} - {}", a.artist, a.album);
+                    self.expanded = Some(ExpandedView {
+                        kind: ExpandKind::Album,
+                        tracks,
+                        selection: 0,
+                        label,
+                    });
+                    self.status = "v: expanded album (v to collapse)".into();
+                }
+            }
+            Tab::Artists => {
+                if let Some(a) = self.artists.get(self.sel_artists).cloned() {
+                    let tracks = c.store.artist_tracks(&a.name);
+                    let label = a.name.clone();
+                    self.expanded = Some(ExpandedView {
+                        kind: ExpandKind::Artist,
+                        tracks,
+                        selection: 0,
+                        label,
+                    });
+                    self.status = "v: expanded artist (v to collapse)".into();
+                }
+            }
+            _ => {}
         }
     }
 

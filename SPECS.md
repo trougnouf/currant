@@ -171,6 +171,8 @@ Metadata is read and written by lofty 0.25.
 | `n` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `d` | show track details (path, metadata, etc.) |
+| `v` | expand album/artist to browse tracks (albums/artists tab, `v` again to collapse) |
+| `Ctrl+J` | jump to the currently playing track in the current tab |
 | `s` | stop after current |
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full) |

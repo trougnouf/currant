@@ -3,7 +3,9 @@
 //! Rendering. Reads the `App` view model (built each frame) and lays out the
 //! tabs, the active list and the now-playing bar.
 
-use crate::app::{App, QueueKind, Tab, ViewPreset, display_title, fmt_duration, render_rating};
+use crate::app::{
+    App, ExpandKind, QueueKind, Tab, ViewPreset, display_title, fmt_duration, render_rating,
+};
 use cassis_core::model::Track;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
@@ -130,6 +132,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_list(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(e) = app.expanded_view() {
+        draw_expanded(f, app, area, e);
+        return;
+    }
     match app.tab {
         Tab::Tracks => draw_tracks(f, app, area, app.tracks_view(), "tracks"),
         Tab::Files => draw_tracks(f, app, area, app.files_view(), "files"),
@@ -138,6 +144,36 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         Tab::Queue => draw_queue(f, app, area),
         Tab::Playlists => draw_playlists(f, app, area),
     }
+}
+
+fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedView) {
+    let playing_id = app.now_playing.as_ref().map(|t| &t.id);
+    let rows: Vec<ListItem> = e
+        .tracks
+        .iter()
+        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id))))
+        .collect();
+    let prefix = match e.kind {
+        ExpandKind::Album => "album tracks",
+        ExpandKind::Artist => "artist tracks",
+    };
+    let title = format!(
+        "{prefix}: {} - {} tracks (v: collapse)",
+        e.label,
+        e.tracks.len()
+    );
+    let list = List::new(rows)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(Style::default().fg(theme::TITLE)),
+        )
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
+        .highlight_symbol(">> ");
+    let mut state = ListState::default();
+    state.select(Some(e.selection));
+    f.render_stateful_widget(list, area, &mut state);
 }
 
 fn draw_tracks(
@@ -473,17 +509,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal =
-        "  Tab:tabs  /:search  p:play  >:next <:prev  +/-:vol  h/l:seek  ?:help  Ctrl+C:quit";
+    let universal = "  Tab:tabs  /:search  p:play  >:next <:prev  +/-:vol  h/l:seek  v:expand  ?:help  Ctrl+J:jump to playing  Ctrl+C:quit";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
             "Enter:play  q:queue  n:next  x:remove  0-5:rate  d:details  c:view  r:sort  m/R:radio  s:stop-after"
         }
         Tab::Albums => {
-            "Enter:play album  q:queue album  n:next  d:details  c:view  r:sort  m/R:radio"
+            "Enter:play album  v:expand  q:queue album  n:next  d:details  c:view  r:sort  m/R:radio"
         }
         Tab::Artists => {
-            "Enter:play artist  q:queue artist  n:next  d:details  c:view  r:sort  m/R:radio"
+            "Enter:play artist  v:expand  q:queue artist  n:next  d:details  c:view  r:sort  m/R:radio"
         }
         Tab::Queue => "Enter:jump to  x:remove  s:stop-after  d:details  c:view",
         Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
@@ -503,6 +538,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
 Tab / Shift+Tab    switch tabs
 j k / arrows       move selection    PgUp/PgDn jump
 Enter             play / activate playlist (playlists tab)
+v                 expand album/artist to browse tracks (v again to collapse)
 q                 enqueue (append)        n play next
 x                 remove from queue (queue tab) / delete playlist (playlists tab)
 s                 stop after current
@@ -515,6 +551,7 @@ p > <             play/pause, next, previous
 P                 save current search as a smart playlist
 g1-9              activate saved playlist by index (or use playlists tab)
 d                 show track details (path, metadata, etc.)
+Ctrl+J            jump to currently playing track in the list
 Ctrl+C / Esc      quit
 
 search syntax:
