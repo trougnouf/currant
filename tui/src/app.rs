@@ -3,11 +3,11 @@
 //! TUI application state: tabs, search, sort, view presets, windowed caches
 //! and the key bindings that drive the controller.
 
-use framboise_core::controller::PlayerController;
-use framboise_core::matcher::{self, parse_query};
-use framboise_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
-use framboise_core::scanner::ScanProgress;
-use framboise_core::store::LibraryStore;
+use cassis_core::controller::PlayerController;
+use cassis_core::matcher::{self, parse_query};
+use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
+use cassis_core::scanner::ScanProgress;
+use cassis_core::store::LibraryStore;
 use std::sync::{Arc, MutexGuard};
 
 /// Library view tabs.

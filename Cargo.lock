@@ -231,6 +231,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "cassis-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "fastrand",
+ "lofty",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uniffi",
+ "ureq",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "cassis-tui"
+version = "0.1.0"
+dependencies = [
+ "cassis-core",
+ "crossterm 0.29.0",
+ "dirs",
+ "ogg",
+ "opus",
+ "ratatui",
+ "rodio",
+]
+
+[[package]]
 name = "cassowary"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -623,36 +653,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "framboise-core"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "fastrand",
- "lofty",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "uniffi",
- "ureq",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "framboise-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm 0.29.0",
- "dirs",
- "framboise-core",
- "ogg",
- "opus",
- "ratatui",
- "rodio",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@
 //! tabs, the active list and the now-playing bar.
 
 use crate::app::{App, QueueKind, Tab, ViewPreset, fmt_duration, render_rating};
-use framboise_core::model::Track;
+use cassis_core::model::Track;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -48,7 +48,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Tab::Files => 4,
     };
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("Framboise"))
+        .block(Block::default().borders(Borders::ALL).title("Cassis"))
         .select(active)
         .style(Style::default())
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -245,8 +245,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let radio = app
         .radio_sort
         .map(|s| match s {
-            framboise_core::model::SortPreset::RandomAlbum => "random album",
-            framboise_core::model::SortPreset::Random => "random",
+            cassis_core::model::SortPreset::RandomAlbum => "random album",
+            cassis_core::model::SortPreset::Random => "random",
             _ => "ordered",
         })
         .unwrap_or("-");

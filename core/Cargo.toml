@@ -1,9 +1,9 @@
 # ./core/Cargo.toml
 [package]
-name = "framboise-core"
+name = "cassis-core"
 version = "0.1.0"
 edition = "2024"
-description = "Core library catalog, query engine and playback state for Framboise."
+description = "Core library catalog, query engine and playback state for Cassis."
 license = "GPL-3.0-or-later"
 
 [dependencies]

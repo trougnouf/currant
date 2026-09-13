@@ -1,6 +1,6 @@
 // ./tui/src/main.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Framboise TUI entry point: opens the catalog, restores the live queue,
+//! Cassis TUI entry point: opens the catalog, restores the live queue,
 //! scans the configured roots, spawns the audio backend and runs the loop.
 
 mod app;
@@ -10,14 +10,14 @@ mod opus;
 mod ui;
 
 use app::App;
+use cassis_core::controller::PlayerController;
+use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
+use cassis_core::store::LibraryStore;
 use crossterm::{
     ExecutableCommand,
     event::{self, Event},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use framboise_core::controller::PlayerController;
-use framboise_core::scanner::{ScanProgress, default_roots, scan_roots};
-use framboise_core::store::LibraryStore;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,7 @@ use std::time::Duration;
 fn catalog_path() -> std::path::PathBuf {
     let dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("framboise");
+        .join("cassis");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("library.db")
 }

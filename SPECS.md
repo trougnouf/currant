@@ -1,17 +1,17 @@
-# Framboise specifications
+# Cassis specifications
 
-> This document is the source of truth for Framboise's behavior, data model, and architecture. Update it whenever introducing a new feature, syntax token, setting, or architectural shift. Keep it concise, behavioral, and accurate.
+> This document is the source of truth for Cassis's behavior, data model, and architecture. Update it whenever introducing a new feature, syntax token, setting, or architectural shift. Keep it concise, behavioral, and accurate.
 
 ---
 
 ## 1. Architecture
 
-Framboise is a fast, offline-first music player with a Rust core and thin frontends (TUI now, Android later).
+Cassis is a fast, offline-first music player with a Rust core and thin frontends (TUI now, Android later).
 
 ### 1.1. Crates
 
-*   **`framboise-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble. No audio, no UI.
-*   **`framboise-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering.
+*   **`cassis-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble. No audio, no UI.
+*   **`cassis-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering.
 *   **Android (future)** — Kotlin + Media3/ExoPlayer, bound to core via uniffi.
 
 ### 1.2. Data flow

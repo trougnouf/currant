@@ -1,6 +1,6 @@
 // ./core/src/lib.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Framboise core: library catalog, query engine, playback state and scrobbling.
+//! Cassis core: library catalog, query engine, playback state and scrobbling.
 pub mod controller;
 pub mod matcher;
 pub mod metadata;

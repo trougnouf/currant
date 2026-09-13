@@ -1,13 +1,13 @@
 # ./tui/Cargo.toml
 [package]
-name = "framboise-tui"
+name = "cassis-tui"
 version = "0.1.0"
 edition = "2024"
-description = "Terminal music player for Framboise."
+description = "Terminal music player for Cassis."
 license = "GPL-3.0-or-later"
 
 [dependencies]
-framboise-core = { path = "../core" }
+cassis-core = { path = "../core" }
 ratatui = "0.26"
 crossterm = "0.29"
 dirs = "6"

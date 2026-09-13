@@ -4,8 +4,8 @@
 //! playback from the controller's live queue. Opus falls back to the bundled
 //! libopus decoder; everything else is decoded by symphonia via rodio.
 
-use framboise_core::controller::PlayerController;
-use framboise_core::model::PlayerIntent;
+use cassis_core::controller::PlayerController;
+use cassis_core::model::PlayerIntent;
 use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;

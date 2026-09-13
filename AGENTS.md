@@ -14,4 +14,4 @@ Use conventional commit prefixes: `feat`, `fix`, `refactor`, `doc`, `perf`, `sty
 
 Stage files explicitly (`git add <path> ...`), never `git add -A` or `git add .` — other agents may have unrelated work in the working tree.
 
-Architecture: core (`framboise-core`) is pure logic (catalog, query engine, controller, scanner, scrobble). Frontends (TUI, future Android) wrap `Arc<Mutex<PlayerController>>` and fire `PlayerIntent`s. Audio is frontend-owned. The catalog is an embedded SQLite database with a read-only connection for queries (WAL mode) and a write connection for mutations.
+Architecture: core (`cassis-core`) is pure logic (catalog, query engine, controller, scanner, scrobble). Frontends (TUI, future Android) wrap `Arc<Mutex<PlayerController>>` and fire `PlayerIntent`s. Audio is frontend-owned. The catalog is an embedded SQLite database with a read-only connection for queries (WAL mode) and a write connection for mutations.
