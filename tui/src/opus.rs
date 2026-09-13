@@ -32,6 +32,7 @@ impl OpusSource {
         let mut reader = ogg::PacketReader::new(BufReader::new(file));
 
         let mut channels: u16 = 2;
+        let mut pre_skip: u16 = 0;
         let mut opus_stream: Option<u32> = None;
         let mut decoder: Option<opus::Decoder> = None;
         let mut samples: Vec<f32> = Vec::new();
@@ -46,6 +47,11 @@ impl OpusSource {
                     .copied()
                     .map(|c| c.clamp(1, 2) as u16)
                     .unwrap_or(2);
+                // Pre-skip is bytes 10-11 (u16 LE) in the OpusHead.
+                pre_skip = data
+                    .get(10..12)
+                    .and_then(|b| u16::from_le_bytes([b[0], b[1]]).into())
+                    .unwrap_or(0);
                 opus_stream = Some(packet.stream_serial());
                 let ch = if channels == 1 {
                     opus::Channels::Mono
@@ -90,6 +96,13 @@ impl OpusSource {
             return Err("no opus audio decoded".to_string());
         }
 
+        // Discard the pre-skip samples that the encoder added for decoder
+        // priming (RFC 7845 section 4.2).
+        let skip = (pre_skip as usize) * channels as usize;
+        if skip > 0 && skip < samples.len() {
+            samples.drain(..skip);
+        }
+
         Ok(Self {
             samples,
             pos: 0,
@@ -119,7 +132,12 @@ impl ExactSizeIterator for OpusSource {}
 
 impl Source for OpusSource {
     fn current_span_len(&self) -> Option<usize> {
-        Some(self.samples.len() - self.pos)
+        // Return None so rodio's UniformSourceIterator treats the entire track
+        // as one span and never recreates the SampleRateConverter mid-stream.
+        // Returning a concrete value causes the converter to be rebuilt every
+        // 32768 samples, which loses interpolation state and produces clicks
+        // whenever the output device's sample rate differs from 48 kHz.
+        None
     }
 
     fn channels(&self) -> NonZero<u16> {

@@ -239,6 +239,40 @@ impl LibraryStore {
         deleted
     }
 
+    /// Find the 0-based row position of `id` in the filtered, sorted list.
+    /// Returns `None` if the track is not in the filtered set, or if the
+    /// sort is random (position is non-deterministic).
+    pub fn track_position(
+        &self,
+        id: &str,
+        expr: &matcher::SearchExpr,
+        sort: SortPreset,
+    ) -> Option<u64> {
+        if matches!(sort, SortPreset::Random | SortPreset::RandomAlbum) {
+            return None;
+        }
+        let frag = expr.to_sql();
+        let conn = self.read_conn();
+        let where_sql = if frag.where_clause.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", frag.where_clause)
+        };
+        let order = matcher::sort_to_order_by(sort);
+        let sql = format!(
+            "SELECT pos FROM (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY {order}) AS pos
+                FROM tracks {where_sql}
+            ) WHERE id = ?"
+        );
+        let mut all_params: Vec<&dyn rusqlite::ToSql> = params_as_dyn(&frag.params);
+        all_params.push(&id);
+        let mut stmt = conn.prepare(&sql).ok()?;
+        stmt.query_row(params_from_iter(all_params), |row| row.get::<_, i64>(0))
+            .ok()
+            .map(|v| v as u64 - 1)
+    }
+
     /// Filter tracks by a compiled query, returning one page plus the total
     /// match count. This is what the TUI calls on every keystroke.
     pub fn filter(

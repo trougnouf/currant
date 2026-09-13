@@ -259,7 +259,7 @@ impl App {
             // Only auto-jump when a track is playing and we're not in
             // search mode (typing would fight the selection).
             if playing_id.is_some() && !self.in_search {
-                self.jump_to_playing();
+                self.jump_to_playing(&c.store);
             }
         }
 
@@ -464,7 +464,7 @@ impl App {
                     self.invalidate_list();
                     self.reset_selection();
                 }
-                KeyCode::Char('j') => self.jump_to_playing(),
+                KeyCode::Char('j') => self.jump_to_playing(&c.store),
                 _ => {}
             }
             return false;
@@ -852,7 +852,7 @@ impl App {
         }
     }
 
-    fn jump_to_playing(&mut self) {
+    fn jump_to_playing(&mut self, store: &LibraryStore) {
         let Some(np) = &self.now_playing else {
             self.status = "nothing playing".into();
             return;
@@ -860,8 +860,7 @@ impl App {
         let id = &np.id;
         match self.tab {
             Tab::Tracks | Tab::Files => {
-                // Search within the loaded window first; if not found,
-                // invalidate and let the user scroll to it.
+                // Search within the loaded window first.
                 let view = if self.tab == Tab::Tracks {
                     &self.tracks
                 } else {
@@ -870,12 +869,31 @@ impl App {
                 if let Some(idx) = view.items.iter().position(|t| &t.id == id) {
                     self.set_selection(view.offset + idx);
                     self.status = "jumped to playing".into();
+                    return;
+                }
+                // Not in the current window — query the store for its position.
+                let expr = parse_query(&self.search);
+                let sort = if self.tab == Tab::Tracks {
+                    self.sort
                 } else {
-                    // Not in the current window — clear the search to ensure
-                    // the track is reachable, then select by id lookup.
+                    SortPreset::Path
+                };
+                if let Some(pos) = store.track_position(id, &expr, sort) {
+                    self.set_selection(pos as usize);
+                    self.status = "jumped to playing".into();
+                } else {
+                    // Track not in the filtered set or sort is random —
+                    // clear the search to widen the scope and retry.
                     self.search.clear();
-                    self.invalidate_list();
-                    self.status = "cleared search to find playing track".into();
+                    let expr = parse_query(&self.search);
+                    if let Some(pos) = store.track_position(id, &expr, sort) {
+                        self.invalidate_list();
+                        self.set_selection(pos as usize);
+                        self.status = "jumped to playing".into();
+                    } else {
+                        self.invalidate_list();
+                        self.status = "playing track not in list".into();
+                    }
                 }
             }
             Tab::Albums => {
