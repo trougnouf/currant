@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "cassis-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs",
  "fastrand",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "cassis-ctl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cassis-core",
  "dirs",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "cassis-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cassis-core",
  "crossterm",
