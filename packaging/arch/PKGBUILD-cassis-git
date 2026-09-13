@@ -26,7 +26,7 @@ pkgver() {
   local commit_hash=$(git rev-parse --short HEAD)
   local commit_count=$(git rev-list --count HEAD)
   local latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "rolling")
-  # Strip leading package-name prefixes (e.g. cassis-core-v0.1.1 -> 0.1.1)
+  # Strip leading 'v' from the workspace release tag (e.g. v0.1.1 -> 0.1.1)
   # and sanitize characters that makepkg forbids in pkgver.
   latest_tag="${latest_tag##*-v}"
   latest_tag="${latest_tag#v}"
