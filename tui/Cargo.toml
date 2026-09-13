@@ -1,0 +1,14 @@
+# ./tui/Cargo.toml
+[package]
+name = "framboise-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+framboise-core = { path = "../core" }
+tokio = { workspace = true }
+ratatui = "0.26"
+crossterm = "0.29"
+# rodio uses symphonia internally to decode flac/mp3/ogg/opus
+rodio = { version = "0.18", default-features = false, features = ["symphonia-all"] }
+walkdir = "2.5" # For our quick testing library scanner

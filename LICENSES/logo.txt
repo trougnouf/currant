@@ -1,0 +1,5 @@
+Raspberry.svg:
+https://commons.wikimedia.org/wiki/File:Raspberry.svg
+Author: Kevin David Pointon alias Firkin
+License: CC0 1.0
+

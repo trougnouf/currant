@@ -1,0 +1,19 @@
+# ./core/Cargo.toml
+[package]
+name = "framboise-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde.workspace = true
+tokio.workspace = true
+wincode = "0.6"
+fastrand = "2.1"
+uuid = { version = "1.10", features = ["v4", "fast-rng"] }
+walkdir = "2.5"
+lofty = "0.25" # Lightning-fast metadata parser
+
+uniffi = { version = "0.32", optional = true }
+
+[features]
+android = ["uniffi"]

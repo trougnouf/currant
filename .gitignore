@@ -1,0 +1,42 @@
+# Rust
+target/
+*.log
+build-dir
+
+# Android - Build Artifacts
+android/app/build/
+android/app/release/
+android/build/
+.gradle/
+android/.gradle/
+.kotlin
+android/app/src/main/res/values*/strings.xml
+
+# Android - Local Configuration
+local.properties
+
+# Android - Native Libs (Built by cargo-ndk)
+android/app/src/main/jniLibs/
+
+# Ignore copied assets
+android/app/src/main/res/font/
+
+# IDE
+.idea/
+*.iml
+*.hprof
+.DS_Store
+
+# Binary Releases (just in case they end up in root)
+*.apk
+*.aab
+
+# Local secrets directory (seen in your tree)
+secrets/
+*.keystore
+
+untracked/
+__pycache__
+radicale_analysis/
+
+music/
