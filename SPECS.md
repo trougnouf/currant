@@ -28,7 +28,7 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 *   The UI must never lag, even with 100,000+ tracks.
 *   Queries are paginated (800-track window). The window reloads only when the selection scrolls outside it.
 *   The cursor is centered vertically in the list area.
-*   SQLite indexes on artist, album, title, genre, year, path, and a composite index on (artist, album, track_number, title) for the default sort.
+*   SQLite indexes on artist, album, title, genre, year, path, and a composite index on (album_artist_fold, album_fold, track_number, title_fold) for the default sort. Sort uses pre-folded shadow columns so ordering is accent- and case-insensitive, matching search.
 *   The read connection serves the pre-scan catalog state via WAL while the scan thread writes.
 
 ---
@@ -97,7 +97,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 
 ### 3.3. Sort presets
 
-`ArtistAlbumTrack` (default), `YearDesc`, `MostPlayed`, `HighestRated`, `Random`, `RandomAlbum`, `Path` (files tab).
+`ArtistAlbumTrack` (default), `YearDesc`, `MostPlayed`, `HighestRated`, `Random`, `RandomAlbum`, `Path` (files tab). All text sort keys use folded shadow columns for accent- and case-insensitive ordering.
 
 ---
 

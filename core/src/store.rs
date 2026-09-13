@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     comment       TEXT NOT NULL,
     title_fold    TEXT NOT NULL DEFAULT '',
     artist_fold   TEXT NOT NULL DEFAULT '',
+    album_artist_fold TEXT NOT NULL DEFAULT '',
     album_fold    TEXT NOT NULL DEFAULT '',
     genre_fold    TEXT NOT NULL DEFAULT '',
     comment_fold  TEXT NOT NULL DEFAULT '',
@@ -44,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_year  ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_tracks_path  ON tracks(path);
-CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(album_artist, album, track_number, title);
+CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(album_artist_fold, album_fold, track_number, title_fold);
 CREATE INDEX IF NOT EXISTS idx_tracks_title_fold  ON tracks(title_fold);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist_fold ON tracks(artist_fold);
 CREATE INDEX IF NOT EXISTS idx_tracks_album_fold  ON tracks(album_fold);
@@ -150,15 +151,16 @@ impl LibraryStore {
         };
         let title_fold = text::fold(&track.title);
         let artist_fold = text::fold(&track.artist);
+        let album_artist_fold = text::fold(&track.album_artist);
         let album_fold = text::fold(&track.album);
         let genre_fold = text::fold(&track.genre);
         let comment_fold = text::fold(&track.comment);
         conn.execute(
             "INSERT OR REPLACE INTO tracks
                 (id, path, title, artist, album_artist, album, genre, comment,
-                 title_fold, artist_fold, album_fold, genre_fold, comment_fold,
+                 title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
                  track_number, year, duration_secs, rating, play_count, last_played, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
             rusqlite::params![
                 track.id,
                 track.path,
@@ -170,6 +172,7 @@ impl LibraryStore {
                 track.comment,
                 title_fold,
                 artist_fold,
+                album_artist_fold,
                 album_fold,
                 genre_fold,
                 comment_fold,
@@ -433,17 +436,18 @@ impl LibraryStore {
             format!("WHERE {}", frag.where_clause)
         };
         let sql = format!(
-            "SELECT
-                CASE
-                    WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
-                    THEN MIN(album_artist)
-                    ELSE 'Various Artists'
-                END AS artist,
-                album, MAX(year) AS year, COUNT(*) AS track_count,
-                SUM(duration_secs) AS total
-             FROM tracks {where_sql}
-             GROUP BY album
-             ORDER BY artist, album"
+            "SELECT * FROM (
+                SELECT
+                    CASE
+                        WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
+                        THEN MIN(album_artist)
+                        ELSE 'Various Artists'
+                    END AS artist,
+                    album, MAX(year) AS year, COUNT(*) AS track_count,
+                    SUM(duration_secs) AS total
+                 FROM tracks {where_sql}
+                 GROUP BY album
+            ) ORDER BY fold(artist), fold(album)"
         );
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
@@ -483,10 +487,11 @@ impl LibraryStore {
             format!("WHERE {}", frag.where_clause)
         };
         let sql = format!(
-            "SELECT artist, COUNT(DISTINCT album) AS album_count, COUNT(*) AS track_count
-             FROM tracks {where_sql}
-             GROUP BY artist
-             ORDER BY artist"
+            "SELECT * FROM (
+                SELECT artist, COUNT(DISTINCT album) AS album_count, COUNT(*) AS track_count
+                 FROM tracks {where_sql}
+                 GROUP BY artist
+            ) ORDER BY fold(artist)"
         );
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
@@ -759,10 +764,17 @@ fn migrate(conn: &Connection) {
         let _ = conn.execute("UPDATE tracks SET album_artist = artist", []);
     }
 
-    // Add pre-folded shadow columns for accent-insensitive search.
+    // Backfill mistagged files whose AlbumArtist tag is present but empty.
+    let _ = conn.execute(
+        "UPDATE tracks SET album_artist = artist WHERE album_artist = ''",
+        [],
+    );
+
+    // Add pre-folded shadow columns for accent-insensitive search and sort.
     for (fold_col, src_col) in [
         ("title_fold", "title"),
         ("artist_fold", "artist"),
+        ("album_artist_fold", "album_artist"),
         ("album_fold", "album"),
         ("genre_fold", "genre"),
         ("comment_fold", "comment"),
@@ -788,6 +800,13 @@ fn migrate(conn: &Connection) {
             );
         }
     }
+
+    // Rebuild the sort index on folded columns (old index used raw columns).
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_tracks_sort", []);
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_sort ON tracks(album_artist_fold, album_fold, track_number, title_fold)",
+        [],
+    );
 }
 
 #[cfg(test)]
@@ -923,5 +942,44 @@ mod tests {
         let loaded = store.load_queue_snapshot().unwrap();
         assert_eq!(loaded.current_track.as_deref(), Some("1"));
         assert_eq!(loaded.dynamic_queue, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn sort_is_case_and_accent_insensitive() {
+        let store = LibraryStore::open_memory().unwrap();
+        store
+            .upsert_track(&t(
+                "1",
+                "Singularity",
+                "Stephan Bodzin",
+                "Powers of Ten",
+                2015,
+            ))
+            .unwrap();
+        store
+            .upsert_track(&t("2", "Nightflower", "ATSUGÁ", "Alive", 2019))
+            .unwrap();
+        store
+            .upsert_track(&t("3", "La Femme", "air", "Moon Safari", 1998))
+            .unwrap();
+        store
+            .upsert_track(&t(
+                "4",
+                "Sabali",
+                "Amadou et Mariam",
+                "Welcome to Mali",
+                2008,
+            ))
+            .unwrap();
+
+        let page = store.filter(&parse_query(""), SortPreset::ArtistAlbumTrack, 100, 0);
+
+        // Folded sort: "air" ~ "Air", "ATSUGÁ" ~ "atsuga", case and accent
+        // do not affect order — lowercase artists interleave with uppercase.
+        let names: Vec<&str> = page.tracks.iter().map(|t| t.artist.as_str()).collect();
+        assert_eq!(
+            names,
+            ["air", "Amadou et Mariam", "ATSUGÁ", "Stephan Bodzin"]
+        );
     }
 }

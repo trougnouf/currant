@@ -169,7 +169,9 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         .unwrap_or_else(|| "Unknown Artist".to_string());
 
     let album_artist = tag
-        .and_then(|t| t.get_string(ItemKey::AlbumArtist).map(String::from))
+        .and_then(|t| t.get_string(ItemKey::AlbumArtist))
+        .filter(|s| !s.is_empty())
+        .map(String::from)
         .unwrap_or_else(|| artist.clone());
 
     let album = tag
