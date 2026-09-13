@@ -10,8 +10,9 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 
 ### 1.1. Crates
 
-*   **`cassis-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble. No audio, no UI.
-*   **`cassis-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering.
+*   **`cassis-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble, control protocol. No audio, no UI.
+*   **`cassis-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering. Exposes a control socket for `cassis-ctl`.
+*   **`cassis-ctl`** — remote control CLI. Connects to the TUI's control socket and dispatches `PlayerIntent`s or queries playback state.
 *   **Android (future)** — Kotlin + Media3/ExoPlayer, bound to core via uniffi.
 
 ### 1.2. Data flow
@@ -20,6 +21,7 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 *   **PlayerController** — owns the live queue (in memory). Receives `PlayerIntent`s from frontends, applies state mutations, queries the store. Queue is snapshotted to the store on exit and restored on startup.
 *   **Audio backend** — frontend-owned. The TUI spawns a thread that polls the controller's `current_track` and `is_playing` fields, decodes the file, and feeds rodio. When `current_track` is `None` and `is_playing` is true, the audio thread calls `determine_next_track()` to pull from the queue.
 *   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. Prunes removed files in a single transaction.
+*   **Control socket** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/cassis.sock`, mode 0600). `cassis-ctl` connects, sends one `ControlRequest` (JSON line), and reads back one `ControlResponse` snapshot. Requests dispatch through the same `PlayerController::dispatch` path as key presses. The protocol types live in `cassis-core` so any future daemon or frontend can reuse them.
 
 ### 1.3. Performance
 
@@ -198,7 +200,41 @@ Metadata is read and written by lofty 0.25.
 
 ---
 
-## 7. Future work
+## 7. CLI (`cassis-ctl`)
+
+Remote control for a running Cassis instance. Connects to the TUI's control socket, sends a `ControlRequest`, and prints the resulting playback state. Does not play audio itself — the TUI (or a future daemon) owns the audio backend.
+
+### 7.1. Protocol
+
+One JSON line per request, one JSON line per response. `ControlRequest` is tagged with `type` (`"Intent"` or `"Status"`). `ControlResponse` contains `is_playing`, `volume`, `current_track` (full `Track` or null), `queue` (`QueueSnapshot`), and an optional `error` field.
+
+### 7.2. Commands
+
+| Command | Maps to | Notes |
+|---|---|---|
+| `play-pause` | `TogglePlayPause` | |
+| `next` | `NextTrack` | |
+| `prev` | `PreviousTrack` | |
+| `stop-after` | `StopAfterCurrent` | |
+| `clear` | `ClearQueue` | |
+| `volume <0-100>` | `SetVolume` | percentage, clamped |
+| `play <id>` | `PlayTrack` | play immediately |
+| `enqueue <id>` | `Enqueue { next: false }` | append to queue |
+| `play-next <id>` | `Enqueue { next: true }` | front of queue |
+| `rate <id> <0-5>` | `RateTrack` | |
+| `status` | (no intent) | query current state |
+
+### 7.3. Standalone daemon (future)
+
+A `cassis-daemon` process (like cfait's `cfait daemon`) would own the `PlayerController` + audio backend without a TUI, exposing the same control socket. The TUI would become a client of the daemon. This is deferred until headless playback is needed; the current in-TUI socket does not paint into a corner.
+
+### 7.4. Android
+
+Android does not use the control socket. The app owns `PlayerController` in-process (via uniffi) and exposes remote control through Android's MediaSession API (notification, lock screen, Bluetooth, `adb shell`).
+
+---
+
+## 8. Future work
 
 Not yet implemented, listed for priority tracking:
 

@@ -1,6 +1,7 @@
 // ./core/src/lib.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Cassis core: library catalog, query engine, playback state and scrobbling.
+pub mod control;
 pub mod controller;
 pub mod matcher;
 pub mod metadata;

@@ -5,6 +5,7 @@
 
 mod app;
 mod audio;
+mod control;
 #[cfg(feature = "opus")]
 mod opus;
 mod ui;
@@ -68,6 +69,7 @@ fn main() -> Result<(), io::Error> {
     let controller = Arc::new(Mutex::new(controller));
     let playback = Arc::new(audio::PlaybackState::new());
     crate::audio::spawn(controller.clone(), playback.clone());
+    crate::control::spawn(controller.clone());
 
     let mut app = App::new();
     app.set_scan_progress(progress);

@@ -15,7 +15,7 @@ walkdir = "2.5"
 lofty = "0.25" # Lightning-fast metadata parser, also writes tags back
 rusqlite = { version = "0.40", features = ["bundled"] } # embedded catalog, indexed search
 dirs = "7"
-serde_json = "1"
+serde_json.workspace = true
 ureq = { version = "3.4", features = ["json"] } # scrobbler HTTP (Listenbrainz, rustls by default)
 
 uniffi = { version = "0.32", optional = true }

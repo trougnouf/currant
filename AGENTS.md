@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Read and maintain [SPECS.md](./SPECS.md) as the project spec.
+
 Keep the codebase clean, lean, and maintainable. If something needs refactoring, do it before proceeding with the request. If a request would add significant complexity, flag it before proceeding.
 
 Do not use Title Case. Write headers, labels, commit messages, and prose in sentence case.

@@ -281,6 +281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cassis-ctl"
+version = "0.1.0"
+dependencies = [
+ "cassis-core",
+ "dirs",
+ "serde_json",
+]
+
+[[package]]
 name = "cassis-tui"
 version = "0.1.0"
 dependencies = [
@@ -291,6 +300,8 @@ dependencies = [
  "opus",
  "ratatui",
  "rodio",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -168,7 +168,7 @@ pub struct Artist {
 }
 
 /// The unified intent system. Both the Android UI and desktop TUI fire these.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PlayerIntent {
     // Playback & queue
     PlayTrack { id: String },
