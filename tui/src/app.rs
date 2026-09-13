@@ -766,6 +766,22 @@ pub fn render_rating(rating: u8) -> String {
     s
 }
 
+/// Truncate a string to `max` chars, appending an ellipsis if it was longer.
+fn truncate(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        s
+    } else {
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// Truncate a track title for display. Very long titles (e.g. artistic tags
+/// like "++++++++++++++++++++++++++++++++++++++") make the line unreadable.
+pub fn display_title(t: &Track) -> String {
+    truncate(t.title.clone(), 50)
+}
+
 pub fn fmt_duration(secs: u32) -> String {
     if secs >= 3600 {
         format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)

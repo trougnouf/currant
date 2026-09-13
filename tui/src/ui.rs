@@ -3,7 +3,7 @@
 //! Rendering. Reads the `App` view model (built each frame) and lays out the
 //! tabs, the active list and the now-playing bar.
 
-use crate::app::{App, QueueKind, Tab, ViewPreset, fmt_duration, render_rating};
+use crate::app::{App, QueueKind, Tab, ViewPreset, display_title, fmt_duration, render_rating};
 use cassis_core::model::Track;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
@@ -33,7 +33,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(44), Constraint::Min(0)])
+        .constraints([Constraint::Length(60), Constraint::Min(0)])
         .split(area);
 
     let titles = ["tracks", "albums", "artists", "queue", "playlists", "files"]
@@ -101,17 +101,18 @@ fn draw_tracks(
 fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
     let marker = if playing { ">" } else { " " };
     let rating = render_rating(t.rating);
+    let title = display_title(t);
     let dur = fmt_duration(t.duration_secs);
     let spans: Vec<Span> = match view {
         ViewPreset::Minimal => vec![
             Span::raw(format!("{marker} ")),
-            Span::raw(t.title.clone()),
+            Span::raw(title),
             Span::raw(" "),
             Span::raw(dur),
         ],
         ViewPreset::Compact => vec![
             Span::raw(format!("{marker} {rating} ")),
-            Span::raw(t.title.clone()),
+            Span::raw(title),
             Span::raw(" - "),
             Span::raw(t.artist.clone()),
             Span::raw(" ["),
@@ -121,7 +122,7 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
         ],
         ViewPreset::Full => vec![
             Span::raw(format!("{marker} {rating} ")),
-            Span::raw(t.title.clone()),
+            Span::raw(title),
             Span::raw(" - "),
             Span::raw(t.artist.clone()),
             Span::raw(" ["),
@@ -214,7 +215,7 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("queue - {} (x: remove)", rows.len())),
+                .title(format!("queue - {} (Enter:play  x:remove)", rows.len())),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol(">> ");
@@ -327,13 +328,28 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         np_area[1],
     );
 
-    let hint = "Tab:tabs  /:search  Enter:play  q:queue  n:next  x:remove  s:stop-after  1-5:rate  c:view  r:sort  m/R:radio  +/-:vol  </>:seek  p:> <  Ctrl+C:quit";
     let status = if app.status.is_empty() {
-        hint.to_string()
+        tab_hint(app.tab)
     } else {
         app.status.clone()
     };
     f.render_widget(Paragraph::new(status), chunks[1]);
+}
+
+/// Context-sensitive keybinding hint for the bottom status line.
+fn tab_hint(tab: Tab) -> String {
+    let universal =
+        "  Tab:tabs  /:search  p:play  >:next <:prev  +/-:vol  h/l:seek  ?:help  Ctrl+C:quit";
+    let actions = match tab {
+        Tab::Tracks | Tab::Files => {
+            "Enter:play  q:queue  n:next  x:remove  0-5:rate  c:view  r:sort  m/R:radio  s:stop-after"
+        }
+        Tab::Albums => "Enter:play album  q:queue album  n:next  c:view  r:sort  m/R:radio",
+        Tab::Artists => "Enter:play artist  q:queue artist  n:next  c:view  r:sort  m/R:radio",
+        Tab::Queue => "Enter:play  x:remove  s:stop-after  c:view",
+        Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
+    };
+    format!("{actions}{universal}")
 }
 
 fn draw_help(f: &mut Frame, area: Rect, app: &App) {
