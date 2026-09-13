@@ -5,6 +5,8 @@ Fast and powerful music player with a Rust core and thin frontends.
 The terminal frontend (`cassis-tui`) runs standalone — no server, no daemon.
 A control socket lets `cassis-ctl` drive playback from scripts or keybindings.
 
+![cassis-tui v0.0.1](https://commons.wikimedia.org/wiki/Special:FilePath/Cassis_music_player_v0.0.1_screenshot_(TUI).png)
+
 ## features
 
 - SQL-compiled query language: `artist:radiohead year:>=1997 *>=4 ~>5m -#pop`

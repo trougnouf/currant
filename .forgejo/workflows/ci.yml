@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "main"
+    tags-ignore:
+      - '*'
+  pull_request:
+
+jobs:
+  # --- VALIDATION (gating) ---
+  test:
+    runs-on: self-hosted-arch
+    container:
+      image: local/arch-builder
+      volumes:
+        - cargo-registry:/usr/local/cargo/registry
+      env:
+        RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: pacman -Sy --noconfirm --needed opus libogg alsa-lib pkgconf
+
+      - name: Check formatting (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Run linter (clippy)
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-targets --all-features --locked --verbose
+
+  # --- ROLLING LINUX BUILD ---
+  rolling-linux:
+    needs: test
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: self-hosted-ubuntu
+    container:
+      image: local/ubuntu-builder
+      volumes:
+        - cargo-registry:/usr/local/cargo/registry
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libopus-dev libogg-dev libasound2-dev pkg-config
+
+      - name: Build Linux binaries
+        run: cargo build --release --locked
+
+      - name: Create Linux tarball
+        run: |
+          mkdir -p cassis-linux-rolling
+          cp target/release/cassis-tui cassis-linux-rolling/
+          cp target/release/cassis-ctl cassis-linux-rolling/
+          cp README.md cassis-linux-rolling/
+          mkdir -p dist-linux
+          tar -cJvf dist-linux/cassis-linux-rolling.tar.xz cassis-linux-rolling
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: rolling-linux
+          path: dist-linux/*
+          retention-days: 1
+
+  # --- PUBLISH ROLLING RELEASE ---
+  publish-rolling:
+    needs: [rolling-linux]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted-ubuntu
+    container:
+      image: local/ubuntu-builder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: dist
+
+      - name: Update rolling release on git.disroot.org
+        env:
+          TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        shell: bash
+        run: |
+          tea login add --name disroot --url ${{ github.server_url }} --token ${{ secrets.RELEASE_TOKEN }}
+          REPO="${{ github.repository }}"
+          TAG_NAME="rolling"
+
+          git config --global user.name "Cassis Bot"
+          git config --global user.email "bot@trougnouf.com"
+          git tag -f "$TAG_NAME"
+          git push origin "$TAG_NAME" -f
+          sleep 5
+
+          cd dist
+          find . -mindepth 2 -type f -exec mv -t . {} +
+
+          tea release delete --repo "$REPO" --confirm "$TAG_NAME" || true
+
+          ASSETS=()
+          for file in *; do
+            if [ -f "$file" ]; then
+              ASSETS+=("--asset" "$file")
+              echo "Queued for upload: $file"
+            fi
+          done
+
+          tea release create \
+            --repo "$REPO" \
+            --title "Rolling development build" \
+            --note "Automated development build (commit: ${{ github.sha }})." \
+            --prerelease \
+            "${ASSETS[@]}" \
+            "$TAG_NAME"
