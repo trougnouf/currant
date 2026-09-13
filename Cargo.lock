@@ -297,6 +297,7 @@ dependencies = [
  "cassis-core",
  "crossterm",
  "dirs",
+ "fastrand",
  "ogg",
  "opus",
  "ratatui",

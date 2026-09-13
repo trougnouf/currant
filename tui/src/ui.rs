@@ -41,6 +41,21 @@ mod theme {
     pub const POPUP_BORDER: Color = Color::Cyan;
 }
 
+use std::sync::OnceLock;
+
+/// Pick the display name once per process so it stays stable within a session
+/// but varies between launches.
+fn display_name() -> &'static str {
+    static NAME: OnceLock<&str> = OnceLock::new();
+    NAME.get_or_init(|| {
+        if fastrand::bool() {
+            "Cassis"
+        } else {
+            "Currant"
+        }
+    })
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -120,7 +135,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Cassis")
+                .title(display_name())
                 .title_style(Style::default().fg(theme::TITLE).bold()),
         )
         .select(active)
