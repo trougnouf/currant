@@ -362,6 +362,29 @@ impl LibraryStore {
         out
     }
 
+    /// Remaining tracks of an album that come *after* the given track number,
+    /// in track order. Used to continue an album the user started mid-way.
+    pub fn album_tracks_after(&self, album: &str, after: u32) -> Vec<Track> {
+        let conn = self.read_conn();
+        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                   FROM tracks WHERE album = ?1 AND track_number > ?2
+                   ORDER BY track_number, title";
+        let mut stmt = match conn.prepare(sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query(rusqlite::params![album, after]) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for t in rows.mapped(row_to_track).flatten() {
+            out.push(t);
+        }
+        out
+    }
+
     /// Aggregated album rows, optionally filtered by the same query.
     pub fn albums(&self, expr: &matcher::SearchExpr) -> Vec<Album> {
         let frag = expr.to_sql();

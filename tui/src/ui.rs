@@ -30,6 +30,7 @@ mod theme {
     pub const ALBUM: Color = Color::Cyan;
     pub const YEAR: Color = Color::DarkGray;
     pub const GENRE: Color = Color::Green;
+    pub const TRACK: Color = Color::DarkGray;
     pub const PATH: Color = Color::DarkGray;
     pub const QUEUE_NOW: Color = Color::Green;
     pub const QUEUE_EXPLICIT: Color = Color::Yellow;
@@ -231,7 +232,7 @@ fn draw_tracks(
 ) {
     let title = format!("{title} - {} of {} (from #{})", items.len(), total, offset);
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
-    let width = area.width.saturating_sub(6) as usize; // borders + highlight symbol
+    let width = area.width.saturating_sub(5) as usize; // borders + highlight symbol
     let rows: Vec<ListItem> = items
         .iter()
         .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id), width)))
@@ -271,20 +272,31 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool, width: usize) -> Line<
     let album_style = Style::default().fg(theme::ALBUM);
     let year_style = Style::default().fg(theme::YEAR);
     let genre_style = Style::default().fg(theme::GENRE);
+    let track_style = Style::default().fg(theme::TRACK);
+
+    let track_no = if t.track_number > 0 {
+        format!("{:02}. ", t.track_number)
+    } else {
+        String::new()
+    };
 
     // Left content (without rating — rating goes to the right).
     let left: Vec<Span> = match view {
         ViewPreset::Minimal => vec![
             Span::styled(format!("{marker} "), marker_style),
+            Span::styled(track_no, track_style),
+            Span::styled(t.artist.clone(), artist_style),
+            Span::raw(" - "),
             Span::styled(title, title_style),
             Span::raw(" "),
             Span::styled(dur, dur_style),
         ],
         ViewPreset::Compact => vec![
             Span::styled(format!("{marker} "), marker_style),
-            Span::styled(title, title_style),
-            Span::raw(" - "),
+            Span::styled(track_no, track_style),
             Span::styled(t.artist.clone(), artist_style),
+            Span::raw(" - "),
+            Span::styled(title, title_style),
             Span::raw(" ["),
             Span::styled(t.album.clone(), album_style),
             Span::raw("] "),
@@ -292,9 +304,10 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool, width: usize) -> Line<
         ],
         ViewPreset::Full => vec![
             Span::styled(format!("{marker} "), marker_style),
-            Span::styled(title, title_style),
-            Span::raw(" - "),
+            Span::styled(track_no, track_style),
             Span::styled(t.artist.clone(), artist_style),
+            Span::raw(" - "),
+            Span::styled(title, title_style),
             Span::raw(" ["),
             Span::styled(t.album.clone(), album_style),
             Span::raw("] "),
@@ -399,9 +412,9 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
             };
             Line::from(vec![
                 Span::styled(format!("{mark} "), Style::default().fg(color).bold()),
-                Span::raw(r.title.clone()),
-                Span::raw(" - "),
                 Span::styled(r.artist.clone(), Style::default().fg(theme::ARTIST)),
+                Span::raw(" - "),
+                Span::raw(r.title.clone()),
             ])
             .into()
         })

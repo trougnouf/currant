@@ -107,7 +107,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 *   **Explicit queue** — tracks the user specifically enqueued (play next = front, enqueue = back). Takes priority.
 *   **Dynamic queue** — generated from the active smart playlist / search. Refilled in batches of 50 when empty. Recently played tracks are excluded.
 *   **History** — capped at 200 tracks, for the "previous" button and de-duplication.
-*   **Random album** — picks one album at random, plays it in track order. Activated with `R`.
+*   **Random album** — when a track starts playing (directly or from the dynamic queue) and the radio is set to random album, the remaining tracks of that track's album play in track order before a random album is picked. If the user enqueues a track, the enqueued track takes over the continuation: the stale dynamic picks from the earlier track's album are cleared when the enqueued track starts, so continuation follows the new track's album. Activated with `R`.
 
 ### 4.2. Position and seeking
 
@@ -194,8 +194,8 @@ Metadata is read and written by lofty 0.25.
 
 ### 6.3. View presets
 
-*   **minimal** — title + duration
-*   **compact** — + rating, artist, album
+*   **minimal** — track number, artist - title, duration
+*   **compact** — + album, rating
 *   **full** — + year, genre
 
 ---

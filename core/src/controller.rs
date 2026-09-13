@@ -299,6 +299,24 @@ impl PlayerController {
 
     fn repopulate_dynamic_queue(&mut self) {
         if self.dynamic_sort == SortPreset::RandomAlbum {
+            // Continue the album the current track belongs to before jumping
+            // to a random one, so playing a track mid-album plays the rest of it.
+            if let Some(cur_id) = self.current_track.as_ref()
+                && let Some(cur) = self.store.get_track(cur_id)
+            {
+                let remaining = self.store.album_tracks_after(&cur.album, cur.track_number);
+                let recent = self.recent_ids();
+                let queue: Vec<String> = remaining
+                    .into_iter()
+                    .map(|t| t.id)
+                    .filter(|id| !recent.contains(id))
+                    .collect();
+                if !queue.is_empty() {
+                    self.dynamic_queue = queue;
+                    return;
+                }
+            }
+
             let tracks = self.store.random_album_tracks(&self.dynamic_query);
             let recent = self.recent_ids();
             self.dynamic_queue = tracks
@@ -417,6 +435,19 @@ mod tests {
         assert!(first.is_some());
         // The dynamic queue should have been refilled beyond the first pick.
         assert!(!c.dynamic_queue.is_empty() || c.history.is_empty());
+    }
+
+    #[test]
+    fn random_album_continues_current_album() {
+        let store = make_store();
+        let mut c = PlayerController::new(store);
+        // make_store creates tracks 0..5, all on album "album" with track_number == i.
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        assert_eq!(c.determine_next_track().as_deref(), Some("1"));
+        // After track 1 finishes, the rest of the album should play in order.
+        assert_eq!(c.determine_next_track().as_deref(), Some("2"));
+        assert_eq!(c.determine_next_track().as_deref(), Some("3"));
+        assert_eq!(c.determine_next_track().as_deref(), Some("4"));
     }
 
     #[test]
