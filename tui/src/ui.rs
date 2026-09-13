@@ -6,10 +6,10 @@
 use crate::app::{App, QueueKind, Tab, ViewPreset, fmt_duration, render_rating};
 use cassis_core::model::Track;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -17,16 +17,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3), // tabs + search
             Constraint::Min(0),    // list
-            Constraint::Length(4), // now playing + status
+            Constraint::Length(5), // now playing + progress + status
         ])
-        .split(f.size());
+        .split(f.area());
 
     draw_header(f, app, chunks[0]);
     draw_list(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
 
     if app.help {
-        draw_help(f, f.size(), app);
+        draw_help(f, f.area(), app);
     }
 }
 
@@ -224,18 +224,37 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(1)])
+        .constraints([Constraint::Length(4), Constraint::Length(1)])
         .split(area);
+
+    let np_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(chunks[0].inner(Margin::new(1, 1)));
+
+    let pos_ms = app.position_ms();
+    let duration_secs = app
+        .now_playing
+        .as_ref()
+        .map(|t| t.duration_secs)
+        .unwrap_or(0);
+    let pos_secs = (pos_ms / 1000) as u32;
+    let pct = if duration_secs > 0 {
+        (pos_ms as f64 / (duration_secs as f64 * 1000.0) * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
 
     let np = if let Some(t) = &app.now_playing {
         let status = if app.is_playing { "playing" } else { "paused" };
         let stop = if app.stop_after { " [stop after]" } else { "" };
         format!(
-            "{status}: {} - {} [{}] {} {}{}",
+            "{status}: {} - {} [{}] {} {}/{}{}",
             t.title,
             t.artist,
             t.album,
             render_rating(t.rating),
+            fmt_duration(pos_secs),
             fmt_duration(t.duration_secs),
             stop
         )
@@ -258,8 +277,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             .title(format!("now playing - {} tracks", app.track_count)),
     );
     f.render_widget(paragraph, chunks[0]);
+    f.render_widget(
+        Gauge::default()
+            .gauge_style(Style::default().add_modifier(Modifier::REVERSED))
+            .percent(pct as u16),
+        np_area[1],
+    );
 
-    let hint = "Tab:tabs  /:search  Enter:play  q:queue  n:next  x:remove  s:stop-after  1-5:rate  c:view  r:sort  m/R:radio  +/-:vol  p:> <  Ctrl+C:quit";
+    let hint = "Tab:tabs  /:search  Enter:play  q:queue  n:next  x:remove  s:stop-after  1-5:rate  c:view  r:sort  m/R:radio  +/-:vol  </>:seek  p:> <  Ctrl+C:quit";
     let status = if app.status.is_empty() {
         hint.to_string()
     } else {
@@ -284,6 +309,7 @@ c                 cycle columns (view preset)
 r                 cycle sort            m set radio  R random-album radio
 p > <             play/pause, next, previous
 +/-               volume up/down
+</> (h/l)         seek backward/forward 5s    H/L seek 30s
 P                 save current search as a smart playlist
 g1-9              activate saved playlist by index
 Ctrl+C / Esc      quit

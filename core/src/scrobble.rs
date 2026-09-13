@@ -69,8 +69,8 @@ impl ListenbrainzScrobbler {
         };
         let url = format!("{}/1/submit-listens", self.api_root);
         let _ = ureq::post(&url)
-            .set("Authorization", &format!("Token {}", self.token))
-            .send_json(payload);
+            .header("Authorization", &format!("Token {}", self.token))
+            .send_json(&payload);
     }
 }
 

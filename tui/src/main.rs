@@ -66,10 +66,12 @@ fn main() -> Result<(), io::Error> {
     }
 
     let controller = Arc::new(Mutex::new(controller));
-    crate::audio::spawn(controller.clone());
+    let playback = Arc::new(audio::PlaybackState::new());
+    crate::audio::spawn(controller.clone(), playback.clone());
 
     let mut app = App::new();
     app.set_scan_progress(progress);
+    app.set_playback(playback);
     app.status = "scanning...".into();
 
     enable_raw_mode()?;

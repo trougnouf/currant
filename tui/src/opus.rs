@@ -7,9 +7,11 @@
 //! the desktop TUI. The whole file is decoded up front — Opus files are small
 //! and this keeps the `Source` implementation trivial and seek-free.
 
+use rodio::source::SeekError;
 use rodio::source::Source;
 use std::fs::File;
 use std::io::BufReader;
+use std::num::NonZero;
 use std::path::Path;
 use std::time::Duration;
 
@@ -116,16 +118,16 @@ impl Iterator for OpusSource {
 impl ExactSizeIterator for OpusSource {}
 
 impl Source for OpusSource {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         Some(self.samples.len() - self.pos)
     }
 
-    fn channels(&self) -> u16 {
-        self.channels
+    fn channels(&self) -> NonZero<u16> {
+        NonZero::new(self.channels).expect("opus channels >= 1")
     }
 
-    fn sample_rate(&self) -> u32 {
-        OPUS_SAMPLE_RATE
+    fn sample_rate(&self) -> NonZero<u32> {
+        NonZero::new(OPUS_SAMPLE_RATE).expect("sample rate > 0")
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -133,5 +135,12 @@ impl Source for OpusSource {
         Some(Duration::from_secs_f64(
             total_samples as f64 / OPUS_SAMPLE_RATE as f64,
         ))
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        let sample_offset =
+            (pos.as_secs_f64() * OPUS_SAMPLE_RATE as f64 * self.channels as f64) as usize;
+        self.pos = sample_offset.min(self.samples.len());
+        Ok(())
     }
 }

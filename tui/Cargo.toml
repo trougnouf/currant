@@ -8,11 +8,11 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 cassis-core = { path = "../core" }
-ratatui = "0.26"
+ratatui = "0.30"
 crossterm = "0.29"
-dirs = "6"
+dirs = "7"
 # rodio uses symphonia internally to decode flac/mp3/ogg(vorbis)/wav.
-rodio = { version = "0.18", default-features = false, features = ["symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-wav"] }
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-wav"] }
 ogg = { version = "0.9", optional = true }
 opus = { version = "0.4", optional = true }
 

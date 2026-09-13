@@ -3,6 +3,7 @@
 //! TUI application state: tabs, search, sort, view presets, windowed caches
 //! and the key bindings that drive the controller.
 
+use crate::audio::PlaybackState;
 use cassis_core::controller::PlayerController;
 use cassis_core::matcher::{self, parse_query};
 use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
@@ -149,6 +150,9 @@ pub struct App {
     pub volume: f32,
     pub smart_playlists: Vec<SmartPlaylist>,
 
+    /// Shared playback state (position + seek channel) with the audio thread.
+    playback: Option<Arc<PlaybackState>>,
+
     /// True when `g` was pressed and we expect a digit to activate a playlist.
     pending_g: bool,
 
@@ -183,6 +187,7 @@ impl App {
             radio_sort: None,
             volume: 0.7,
             smart_playlists: Vec::new(),
+            playback: None,
             pending_g: false,
             scan_progress: None,
             dirty: true,
@@ -191,6 +196,14 @@ impl App {
 
     pub fn set_scan_progress(&mut self, p: Arc<ScanProgress>) {
         self.scan_progress = Some(p);
+    }
+
+    pub fn set_playback(&mut self, p: Arc<PlaybackState>) {
+        self.playback = Some(p);
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        self.playback.as_ref().map(|p| p.position_ms()).unwrap_or(0)
     }
 
     /// Rebuild caches and the view model from the controller. Called each frame.
@@ -480,6 +493,10 @@ impl App {
                 c.dispatch(PlayerIntent::SetVolume { volume: v });
                 self.status = format!("vol: {:0.0}%", v * 100.0);
             }
+            KeyCode::Left | KeyCode::Char('h') => self.seek_relative(c, -5),
+            KeyCode::Right | KeyCode::Char('l') => self.seek_relative(c, 5),
+            KeyCode::Char('H') => self.seek_relative(c, -30),
+            KeyCode::Char('L') => self.seek_relative(c, 30),
             _ => {}
         }
         false
@@ -669,6 +686,19 @@ impl App {
             SortPreset::Random => "radio: random".into(),
             _ => "radio: set".into(),
         };
+    }
+
+    fn seek_relative(&mut self, _c: &mut MutexGuard<'_, PlayerController>, delta_secs: i64) {
+        let Some(pb) = &self.playback else { return };
+        let pos_ms = pb.position_ms() as i64;
+        let dur_ms = self
+            .now_playing
+            .as_ref()
+            .map(|t| t.duration_secs as i64 * 1000)
+            .unwrap_or(0);
+        let target = (pos_ms + delta_secs * 1000).max(0).min(dur_ms) as u64;
+        pb.request_seek(target);
+        self.status = format!("seek: {}", fmt_duration((target / 1000) as u32));
     }
 }
 

@@ -107,7 +107,14 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 *   **History** — capped at 200 tracks, for the "previous" button and de-duplication.
 *   **Random album** — picks one album at random, plays it in track order. Activated with `R`.
 
-### 4.2. Intents
+### 4.2. Position and seeking
+
+*   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics). The UI reads it each frame.
+*   Seeking is requested through the same `PlaybackState`: the UI sets a target in milliseconds, the audio thread calls `Player::try_seek` on the next loop iteration.
+*   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
+*   The now-playing bar shows `position / duration` and a progress bar (Gauge widget).
+
+### 4.3. Intents
 
 All frontends fire `PlayerIntent` into the controller:
 
@@ -121,7 +128,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` — smart playlist management.
 *   `ScanLibrary` — set roots and trigger a scan.
 
-### 4.3. Scrobbling
+### 4.4. Scrobbling
 
 *   `Scrobbler` trait: `report(track, event)`.
 *   Events: `NowPlaying` (on track start), `Submitted` (on track completion past threshold: half duration or 4 min, whichever is shorter).
@@ -138,7 +145,7 @@ All frontends fire `PlayerIntent` into the controller:
 | FLAC | symphonia via rodio | |
 | OGG/Vorbis | symphonia via rodio | |
 | WAV | symphonia via rodio | |
-| Opus | libopus (opt-in `opus` feature) | rodio's symphonia 0.5 has no opus codec; fallback to bundled libopus decoder |
+| Opus | libopus (opt-in `opus` feature) | rodio's symphonia 0.5 has no opus codec; bundled libopus decoder with seek support |
 
 Metadata is read and written by lofty 0.25.
 
@@ -172,6 +179,8 @@ Metadata is read and written by lofty 0.25.
 | `>` `.` | next track |
 | `<` `,` | previous track |
 | `+` `-` | volume up / down |
+| `Left` `Right` / `h` `l` | seek backward / forward 5s |
+| `H` `L` | seek backward / forward 30s |
 | `P` | save current search as a smart playlist |
 | `g1`-`g9` | activate saved playlist by index |
 | `?` | help overlay (search syntax + playlists) |
@@ -193,7 +202,6 @@ Not yet implemented, listed for priority tracking:
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Settings UI for scan roots, scrobble token, volume default
-*   Seek / position display
 *   Playlist tab (dedicated tab for saved smart playlists)
 *   Gapless playback
 *   ReplayGain

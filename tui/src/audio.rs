@@ -6,13 +6,48 @@
 
 use cassis_core::controller::PlayerController;
 use cassis_core::model::PlayerIntent;
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// Shared playback position + seek channel between the audio thread and the
+/// UI. Position is in milliseconds; the audio thread writes it every loop
+/// iteration, the UI reads it each frame. Seek requests use a sentinel of -1
+/// (no pending seek) or a non-negative millisecond target.
+pub struct PlaybackState {
+    position_ms: AtomicU64,
+    seek_ms: AtomicI64,
+}
+
+impl PlaybackState {
+    pub fn new() -> Self {
+        Self {
+            position_ms: AtomicU64::new(0),
+            seek_ms: AtomicI64::new(-1),
+        }
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        self.position_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn request_seek(&self, ms: u64) {
+        self.seek_ms.store(ms as i64, Ordering::Relaxed);
+    }
+
+    fn take_seek(&self) -> Option<u64> {
+        let v = self.seek_ms.swap(-1, Ordering::Relaxed);
+        if v >= 0 { Some(v as u64) } else { None }
+    }
+
+    fn set_position(&self, ms: u64) {
+        self.position_ms.store(ms, Ordering::Relaxed);
+    }
+}
 
 /// Minimum fraction/length of a track before a completion scrobble is sent.
 fn scrobble_threshold(duration_secs: u32) -> Duration {
@@ -24,14 +59,13 @@ fn scrobble_threshold(duration_secs: u32) -> Duration {
 }
 
 /// Open `path` as a rodio `Source`. Tries symphonia first, then the opus
-/// decoder when the `opus` feature is enabled. Sink::append already calls
-/// convert_samples() internally, so we return the raw decoder.
+/// decoder when the `opus` feature is enabled.
 fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
     let p = Path::new(path);
     if let Ok(file) = File::open(p)
-        && let Ok(decoder) = Decoder::new(BufReader::new(file))
+        && let Ok(decoder) = Decoder::try_from(file)
     {
-        return Some(Box::new(decoder.convert_samples()));
+        return Some(Box::new(decoder));
     }
     #[cfg(feature = "opus")]
     {
@@ -51,16 +85,16 @@ fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
 }
 
 /// Spawn the audio thread. It owns the output stream and polls the controller.
-pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
+pub fn spawn(
+    controller: Arc<Mutex<PlayerController>>,
+    state: Arc<PlaybackState>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
-        let (_stream, handle) = match OutputStream::try_default() {
+        let stream = match DeviceSinkBuilder::open_default_sink() {
             Ok(s) => s,
             Err(_) => return,
         };
-        let sink = match Sink::try_new(&handle) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        let player = Player::connect_new(stream.mixer());
 
         let mut playing_id: Option<String> = None;
         let mut started_at = Instant::now();
@@ -72,14 +106,25 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                 (c.is_playing, c.current_track.clone(), c.volume)
             };
 
-            sink.set_volume(volume);
+            player.set_volume(volume);
+
+            // Publish the current playback position for the UI.
+            state.set_position(player.get_pos().as_millis() as u64);
+
+            // Process pending seek requests.
+            if let Some(target_ms) = state.take_seek()
+                && playing_id.is_some()
+            {
+                let _ = player.try_seek(Duration::from_millis(target_ms));
+                state.set_position(target_ms);
+            }
 
             if !is_playing {
-                sink.pause();
+                player.pause();
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
-            sink.play();
+            player.play();
 
             // When no track is current but we should be playing, pull the
             // next track from the queue (explicit or dynamic).
@@ -95,12 +140,7 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                     if started_at.elapsed() >= threshold {
                         controller.lock().unwrap().on_track_completed(&prev);
                     }
-                    // Skip the old source non-blockingly. skip_one() sets
-                    // a flag that the periodic access checks every 5ms to
-                    // advance to the next source. clear() would block on
-                    // sleep_until_end(); stop() would also block in append().
-                    sink.skip_one();
-                    // Give the skip flag time to propagate before appending.
+                    player.skip_one();
                     thread::sleep(Duration::from_millis(10));
                 }
 
@@ -116,8 +156,8 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                                 .map(|t| t.duration_secs)
                                 .unwrap_or(0);
                             threshold = scrobble_threshold(dur);
-                            sink.append(src);
-                            sink.play();
+                            player.append(src);
+                            player.play();
                             playing_id = Some(id.clone());
                             started_at = Instant::now();
                             controller.lock().unwrap().on_track_started(id);
@@ -132,7 +172,7 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
             }
 
             // Same track: detect natural end.
-            if playing_id.is_some() && sink.empty() {
+            if playing_id.is_some() && player.empty() {
                 let prev = playing_id.take().unwrap();
                 if started_at.elapsed() >= threshold {
                     controller.lock().unwrap().on_track_completed(&prev);
