@@ -13,6 +13,7 @@ serde_json = "1"
 ratatui = "0.30"
 crossterm = "0.29"
 dirs = "7"
+unicode-width = "0.2"
 # rodio uses symphonia internally to decode flac/mp3/ogg(vorbis)/wav.
 rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-wav"] }
 ogg = { version = "0.9", optional = true }

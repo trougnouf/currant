@@ -104,6 +104,10 @@ fn run(
             app.refresh(&c);
         }
 
+        // Update column widths with debounce before rendering.
+        let size = terminal.size()?;
+        app.update_col_widths(size.width as usize, size.height as usize);
+
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(Duration::from_millis(30))?

@@ -10,6 +10,8 @@ use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset,
 use cassis_core::scanner::ScanProgress;
 use cassis_core::store::LibraryStore;
 use std::sync::{Arc, MutexGuard};
+use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 /// Library view tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +52,25 @@ pub enum ViewPreset {
     Compact, // + artist + album
     Full,    // + rating + year + genre
 }
+
+/// Fixed-width column layout for the track list. Each field is padded or
+/// truncated to its width. Debounced against scrolling so columns stay stable
+/// while the user browses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColumnWidths {
+    pub artist: usize,
+    pub album: usize,
+    pub title: usize, // includes track_no prefix
+    pub year: usize,
+    pub genre: usize,
+    pub duration: usize,
+}
+
+/// Key used to detect structural vs scroll changes for column-width debouncing.
+/// Structural changes (tab/view/content) adopt immediately; scroll changes
+/// wait for the debounce period before adopting new widths.
+type ColStructuralKey = (Tab, ViewPreset, bool, String);
+type ColScrollKey = (usize, usize);
 
 /// One row in the queue tab.
 #[derive(Debug, Clone)]
@@ -191,6 +212,13 @@ pub struct App {
     scan_progress: Option<Arc<ScanProgress>>,
 
     dirty: bool,
+
+    // --- column-width debounce state ---
+    col_widths: ColumnWidths,
+    col_structural: ColStructuralKey,
+    col_scroll: ColScrollKey,
+    col_last_scroll: Instant,
+    col_initialized: bool,
 }
 
 impl App {
@@ -220,12 +248,17 @@ impl App {
             stop_after: false,
             track_count: 0,
             radio_sort: None,
-            volume: 0.7,
+            volume: 1.0,
             smart_playlists: Vec::new(),
             playback: None,
             pending_g: false,
             scan_progress: None,
             dirty: true,
+            col_widths: ColumnWidths::default(),
+            col_structural: (Tab::Tracks, ViewPreset::Compact, false, String::new()),
+            col_scroll: (0, 0),
+            col_last_scroll: Instant::now(),
+            col_initialized: false,
         }
     }
 
@@ -416,6 +449,97 @@ impl App {
 
     pub fn expanded_view(&self) -> Option<&ExpandedView> {
         self.expanded.as_ref()
+    }
+
+    pub fn col_widths(&self) -> ColumnWidths {
+        self.col_widths
+    }
+
+    /// Recompute column widths with debounce. Call once per frame before draw,
+    /// passing the full terminal width and height. Column widths are computed
+    /// from only the currently visible rows (not the full 800-item window).
+    pub fn update_col_widths(&mut self, full_width: usize, full_height: usize) {
+        const DEBOUNCE: Duration = Duration::from_millis(1000);
+
+        // 2 borders + 3 highlight symbol (normal), +1 extra in expanded view.
+        let border_overhead = if self.expanded.is_some() { 6 } else { 5 };
+        let usable_width = full_width.saturating_sub(border_overhead);
+
+        // Layout: header(3) + list + footer(5). List area height minus 2 borders.
+        let visible_rows = full_height.saturating_sub(3 + 5 + 2);
+
+        let computed = {
+            let (items, selection, offset) = if let Some(e) = &self.expanded {
+                if e.drilled || e.kind == ExpandKind::Album {
+                    (&e.tracks[..], e.selection, 0)
+                } else {
+                    (&[][..], 0, 0)
+                }
+            } else {
+                match self.tab {
+                    Tab::Tracks => (
+                        &self.tracks.items[..],
+                        self.tracks.selection,
+                        self.tracks.offset,
+                    ),
+                    Tab::Files => (
+                        &self.files.items[..],
+                        self.files.selection,
+                        self.files.offset,
+                    ),
+                    _ => (&[][..], 0, 0),
+                }
+            };
+
+            if items.is_empty() {
+                None
+            } else {
+                // Slice the visible rows from the window. `selection` is the
+                // absolute index; `offset` is the window's first item index.
+                // The on-screen position is `selection - offset` (the list_index).
+                let list_index = selection.saturating_sub(offset);
+                // center_select puts the selection at visible_rows/2, so the
+                // visible slice starts at list_index - visible_rows/2.
+                let half = visible_rows / 2;
+                let vis_start = list_index.saturating_sub(half);
+                let vis_end = (vis_start + visible_rows).min(items.len());
+                let vis_items = &items[vis_start.min(items.len())..vis_end];
+
+                if vis_items.is_empty() {
+                    None
+                } else {
+                    let ideal = compute_ideal_widths(vis_items, self.view, usable_width);
+                    let is_expanded = self.expanded.is_some();
+                    Some((ideal, selection, offset, is_expanded))
+                }
+            }
+        };
+
+        match computed {
+            None => {
+                self.col_widths = ColumnWidths::default();
+                self.col_initialized = false;
+            }
+            Some((ideal, selection, offset, is_expanded)) => {
+                let structural = (self.tab, self.view, is_expanded, self.search.clone());
+                let scroll = (selection, offset);
+
+                if !self.col_initialized || structural != self.col_structural {
+                    // First frame or structural change — adopt immediately.
+                    self.col_structural = structural;
+                    self.col_scroll = scroll;
+                    self.col_last_scroll = Instant::now();
+                    self.col_widths = ideal;
+                    self.col_initialized = true;
+                } else if scroll != self.col_scroll {
+                    // Scroll change — debounce.
+                    self.col_scroll = scroll;
+                    self.col_last_scroll = Instant::now();
+                } else if self.col_last_scroll.elapsed() >= DEBOUNCE {
+                    self.col_widths = ideal;
+                }
+            }
+        }
     }
 
     // --- input ---
@@ -1026,13 +1150,30 @@ pub fn render_rating(rating: u8) -> String {
     s
 }
 
-/// Truncate a string to `max` chars, appending an ellipsis if it was longer.
-fn truncate(s: String, max: usize) -> String {
-    if s.chars().count() <= max {
+/// Display width of a string (accounts for wide CJK characters).
+pub fn disp_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Truncate a string to `max` display columns, appending an ellipsis if it
+/// was wider. Handles wide (CJK) characters that take 2 columns each.
+pub fn truncate(s: String, max: usize) -> String {
+    if max == 0 {
+        String::new()
+    } else if s.width() <= max {
         s
     } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
+        let mut out = String::new();
+        let mut w = 0usize;
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if w + cw > max - 1 {
+                break;
+            }
+            out.push(c);
+            w += cw;
+        }
+        format!("{out}…")
     }
 }
 
@@ -1059,5 +1200,210 @@ pub fn sort_label(sort: SortPreset) -> &'static str {
         SortPreset::Random => "random",
         SortPreset::RandomAlbum => "random album",
         SortPreset::Path => "path",
+    }
+}
+
+// --- column width computation ---
+
+/// Compute ideal column widths for the given tracks and view preset.
+///
+/// Fixed fields (year, duration) keep their natural max width. Flex fields
+/// (artist, album, title, genre) keep their natural width when everything
+/// fits; when it overflows, remaining space is distributed by ratio
+/// (artist:album:title:genre = 3:3:3:1), capped at natural width with
+/// surplus redistributed to fields that need more.
+pub fn compute_ideal_widths(
+    items: &[Track],
+    view: ViewPreset,
+    usable_width: usize,
+) -> ColumnWidths {
+    // Natural-width caps so one very long value in the window doesn't starve
+    // the other columns. Title is already capped at 50 by display_title.
+    const ARTIST_CAP: usize = 25;
+    const ALBUM_CAP: usize = 35;
+    const GENRE_CAP: usize = 15;
+
+    let mut max_artist = 0usize;
+    let mut max_album = 0usize;
+    let mut max_title = 0usize;
+    let mut max_year = 0usize;
+    let mut max_genre = 0usize;
+    let mut max_duration = 0usize;
+
+    for t in items {
+        max_artist = max_artist.max(disp_width(&t.artist)).min(ARTIST_CAP);
+        if view != ViewPreset::Minimal {
+            max_album = max_album.max(disp_width(&t.album)).min(ALBUM_CAP);
+        }
+        let track_no_len = if t.track_number > 0 {
+            disp_width(&format!("{:02}. ", t.track_number))
+        } else {
+            0
+        };
+        max_title = max_title.max(track_no_len + disp_width(&display_title(t)));
+        if view == ViewPreset::Full {
+            if t.year > 0 {
+                max_year = max_year.max(disp_width(&t.year.to_string()));
+            }
+            max_genre = max_genre.max(disp_width(&t.genre)).min(GENRE_CAP);
+        }
+        max_duration = max_duration.max(disp_width(&fmt_duration(t.duration_secs)));
+    }
+
+    // marker(2) + rating(8: space + "[*****]")
+    let available = usable_width.saturating_sub(2 + 8);
+
+    match view {
+        ViewPreset::Minimal => {
+            // columns: artist, title, duration (3 cols, 2 separators)
+            let flex = resolve_flex(
+                &[max_artist, max_title],
+                &[3, 3],
+                max_duration,
+                2,
+                available,
+            );
+            ColumnWidths {
+                artist: flex[0],
+                album: 0,
+                title: flex[1],
+                year: 0,
+                genre: 0,
+                duration: max_duration,
+            }
+        }
+        ViewPreset::Compact => {
+            // columns: artist, album, title, duration (4 cols, 3 separators)
+            let flex = resolve_flex(
+                &[max_artist, max_album, max_title],
+                &[3, 3, 3],
+                max_duration,
+                3,
+                available,
+            );
+            ColumnWidths {
+                artist: flex[0],
+                album: flex[1],
+                title: flex[2],
+                year: 0,
+                genre: 0,
+                duration: max_duration,
+            }
+        }
+        ViewPreset::Full => {
+            // columns: artist, album, title, year, genre, duration (6 cols, 5 separators)
+            let fixed = max_year + max_duration;
+            let flex = resolve_flex(
+                &[max_artist, max_album, max_title, max_genre],
+                &[3, 3, 3, 1],
+                fixed,
+                5,
+                available,
+            );
+            ColumnWidths {
+                artist: flex[0],
+                album: flex[1],
+                title: flex[2],
+                year: max_year,
+                genre: flex[3],
+                duration: max_duration,
+            }
+        }
+    }
+}
+
+/// Resolve flex column widths: use natural widths if they fit, otherwise
+/// distribute remaining space by ratio.
+fn resolve_flex(
+    naturals: &[usize],
+    ratios: &[usize],
+    fixed: usize,
+    separators: usize,
+    available: usize,
+) -> Vec<usize> {
+    let total_natural = fixed + naturals.iter().sum::<usize>() + separators;
+    if total_natural <= available {
+        return naturals.to_vec();
+    }
+    let remaining = available.saturating_sub(fixed + separators);
+    distribute_flex(naturals, ratios, remaining)
+}
+
+/// Distribute `remaining` chars among flex fields by ratio, capped at each
+/// field's natural width. Surplus from fields that need less is redistributed
+/// to fields that still need more, prioritizing those with the largest
+/// deficit. This minimizes truncation across all columns.
+fn distribute_flex(naturals: &[usize], ratios: &[usize], remaining: usize) -> Vec<usize> {
+    let n = naturals.len();
+    if n == 0 {
+        return vec![];
+    }
+    if remaining == 0 {
+        return vec![0; n];
+    }
+    let total_ratio: usize = ratios.iter().sum::<usize>().max(1);
+
+    let mut widths: Vec<usize> = (0..n)
+        .map(|i| (remaining * ratios[i]) / total_ratio)
+        .collect();
+
+    // Cap at natural, collect surplus.
+    let mut surplus = 0usize;
+    for i in 0..n {
+        if widths[i] > naturals[i] {
+            surplus += widths[i] - naturals[i];
+            widths[i] = naturals[i];
+        }
+    }
+
+    // Redistribute surplus one unit at a time to the field with the largest
+    // deficit (natural - current), until no field needs more or surplus runs
+    // out. This greedily minimizes the maximum truncation ratio.
+    while surplus > 0 {
+        let best = (0..n)
+            .filter(|&i| widths[i] < naturals[i])
+            .max_by_key(|&i| naturals[i] - widths[i]);
+        match best {
+            Some(i) => {
+                widths[i] += 1;
+                surplus -= 1;
+            }
+            None => break,
+        }
+    }
+
+    widths
+}
+
+/// Left-align text in a fixed-width column: truncate with ellipsis if too
+/// wide, right-pad with spaces if too narrow. Uses display width so wide
+/// (CJK) characters are handled correctly.
+pub fn col_text(s: &str, width: usize) -> String {
+    let len = disp_width(s);
+    if len > width {
+        truncate(s.to_string(), width)
+    } else {
+        format!("{s}{}", " ".repeat(width - len))
+    }
+}
+
+/// Right-align a value in a fixed-width column: left-pad with spaces.
+pub fn col_num(s: &str, width: usize) -> String {
+    let len = disp_width(s);
+    if len > width {
+        // Truncate by display width from the left.
+        let mut out = String::new();
+        let mut w = 0usize;
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if w + cw > width {
+                break;
+            }
+            out.push(c);
+            w += cw;
+        }
+        out
+    } else {
+        format!("{}{s}", " ".repeat(width - len))
     }
 }

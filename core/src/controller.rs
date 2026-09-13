@@ -48,7 +48,7 @@ impl PlayerController {
             current_track: None,
             stop_after_current: false,
             is_playing: false,
-            volume: 0.7,
+            volume: 1.0,
             dynamic_query: SearchExpr::Str(
                 crate::model::Field::All,
                 crate::model::CmpOp::Contains,
@@ -92,6 +92,9 @@ impl PlayerController {
         // 1. The explicit queue always wins (play-next / user-enqueued tracks).
         if let Some(id) = self.explicit_queue.first().cloned() {
             self.explicit_queue.remove(0);
+            // Invalidate stale dynamic picks so album continuation follows
+            // the enqueued track, not whatever was playing before it.
+            self.dynamic_queue.clear();
             self.set_current(id.clone());
             return Some(id);
         }
@@ -448,6 +451,58 @@ mod tests {
         assert_eq!(c.determine_next_track().as_deref(), Some("2"));
         assert_eq!(c.determine_next_track().as_deref(), Some("3"));
         assert_eq!(c.determine_next_track().as_deref(), Some("4"));
+    }
+
+    #[test]
+    fn enqueue_takes_over_album_continuation() {
+        // Two albums: "x" (tracks 0-2) and "y" (tracks 3-5).
+        let store = Arc::new(LibraryStore::open_memory().unwrap());
+        for (id, album, tn) in [
+            (0, "x", 0),
+            (1, "x", 1),
+            (2, "x", 2),
+            (3, "y", 0),
+            (4, "y", 1),
+            (5, "y", 2),
+        ] {
+            store
+                .upsert_track(&Track {
+                    id: id.to_string(),
+                    path: format!("/m/{id}.mp3"),
+                    title: format!("song {id}"),
+                    artist: "pink".into(),
+                    album_artist: "pink".into(),
+                    album: album.into(),
+                    genre: "jazz".into(),
+                    comment: String::new(),
+                    track_number: tn,
+                    year: 2000,
+                    duration_secs: 100,
+                    rating: 0,
+                    play_count: 0,
+                    last_played: None,
+                    file_mtime: 0,
+                })
+                .unwrap();
+        }
+        let mut c = PlayerController::new(store);
+
+        // Play track 1 (album x) — dynamic queue fills with 2 (rest of x).
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        assert_eq!(c.determine_next_track().as_deref(), Some("1"));
+
+        // Enqueue track 3 (album y) as play-next.
+        c.dispatch(PlayerIntent::Enqueue {
+            id: "3".into(),
+            next: true,
+        });
+
+        // Track 3 plays from the explicit queue; the stale x-album picks are dropped.
+        assert_eq!(c.determine_next_track().as_deref(), Some("3"));
+
+        // After track 3, continuation should follow album y (4, 5), not x (2).
+        assert_eq!(c.determine_next_track().as_deref(), Some("4"));
+        assert_eq!(c.determine_next_track().as_deref(), Some("5"));
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! tabs, the active list and the now-playing bar.
 
 use crate::app::{
-    App, ExpandKind, QueueKind, Tab, ViewPreset, display_title, fmt_duration, render_rating,
+    App, ColumnWidths, ExpandKind, QueueKind, Tab, ViewPreset, col_num, col_text, disp_width,
+    display_title, fmt_duration, render_rating, truncate,
 };
 use cassis_core::model::Track;
 use ratatui::Frame;
@@ -64,6 +65,19 @@ pub fn draw(f: &mut Frame, app: &App) {
         f.render_widget(Clear, area);
         draw_details(f, area, track);
     }
+}
+
+/// Select an item and center it in the visible area by setting the scroll
+/// offset manually. The list renderer only adjusts offset when the selected
+/// item is outside the visible range, so a pre-set offset that keeps the
+/// selection visible is respected.
+fn center_select(state: &mut ListState, selected: usize, total: usize, area: Rect) {
+    state.select(Some(selected));
+    let visible = area.height.saturating_sub(2) as usize; // borders
+    let half = visible / 2;
+    let max_offset = total.saturating_sub(visible);
+    let offset = selected.saturating_sub(half).min(max_offset);
+    *state.offset_mut() = offset;
 }
 
 /// A centered rect inside `area` with the given width/height percentages.
@@ -156,10 +170,19 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
     }
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
     let width = area.width.saturating_sub(6) as usize;
+    let cols = app.col_widths();
     let rows: Vec<ListItem> = e
         .tracks
         .iter()
-        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id), width)))
+        .map(|t| {
+            ListItem::new(track_line(
+                t,
+                app.view,
+                playing_id == Some(&t.id),
+                &cols,
+                width,
+            ))
+        })
         .collect();
     let prefix = match e.kind {
         ExpandKind::Album => "album tracks",
@@ -180,7 +203,7 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(e.selection));
+    center_select(&mut state, e.selection, e.tracks.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -219,7 +242,7 @@ fn draw_expanded_albums(f: &mut Frame, _app: &App, area: Rect, e: &crate::app::E
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(e.selection));
+    center_select(&mut state, e.selection, e.albums.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -233,9 +256,18 @@ fn draw_tracks(
     let title = format!("{title} - {} of {} (from #{})", items.len(), total, offset);
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
     let width = area.width.saturating_sub(5) as usize; // borders + highlight symbol
+    let cols = app.col_widths();
     let rows: Vec<ListItem> = items
         .iter()
-        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id), width)))
+        .map(|t| {
+            ListItem::new(track_line(
+                t,
+                app.view,
+                playing_id == Some(&t.id),
+                &cols,
+                width,
+            ))
+        })
         .collect();
     let list = List::new(rows)
         .block(
@@ -247,11 +279,17 @@ fn draw_tracks(
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(selected));
+    center_select(&mut state, selected, total as usize, area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn track_line(t: &Track, view: ViewPreset, playing: bool, width: usize) -> Line<'_> {
+fn track_line<'a>(
+    t: &'a Track,
+    view: ViewPreset,
+    playing: bool,
+    cols: &ColumnWidths,
+    width: usize,
+) -> Line<'a> {
     let marker = if playing { ">" } else { " " };
     let marker_style = if playing {
         Style::default().fg(theme::NOW_PLAYING).bold()
@@ -280,60 +318,61 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool, width: usize) -> Line<
         String::new()
     };
 
-    // Left content (without rating — rating goes to the right).
-    let left: Vec<Span> = match view {
-        ViewPreset::Minimal => vec![
-            Span::styled(format!("{marker} "), marker_style),
-            Span::styled(track_no, track_style),
-            Span::styled(t.artist.clone(), artist_style),
-            Span::raw(" - "),
-            Span::styled(title, title_style),
-            Span::raw(" "),
-            Span::styled(dur, dur_style),
-        ],
-        ViewPreset::Compact => vec![
-            Span::styled(format!("{marker} "), marker_style),
-            Span::styled(track_no, track_style),
-            Span::styled(t.artist.clone(), artist_style),
-            Span::raw(" - "),
-            Span::styled(title, title_style),
-            Span::raw(" ["),
-            Span::styled(t.album.clone(), album_style),
-            Span::raw("] "),
-            Span::styled(dur, dur_style),
-        ],
-        ViewPreset::Full => vec![
-            Span::styled(format!("{marker} "), marker_style),
-            Span::styled(track_no, track_style),
-            Span::styled(t.artist.clone(), artist_style),
-            Span::raw(" - "),
-            Span::styled(title, title_style),
-            Span::raw(" ["),
-            Span::styled(t.album.clone(), album_style),
-            Span::raw("] "),
-            Span::styled(
-                if t.year > 0 {
-                    t.year.to_string()
-                } else {
-                    String::new()
-                },
-                year_style,
-            ),
-            Span::raw(" "),
-            Span::styled(t.genre.clone(), genre_style),
-            Span::raw(" "),
-            Span::styled(dur, dur_style),
-        ],
+    // Build column spans: marker, artist, [album], title (track_no + title),
+    // [year], [genre], duration. Single-space separators between columns.
+    let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
+
+    // Artist (left-aligned).
+    spans.push(Span::styled(col_text(&t.artist, cols.artist), artist_style));
+
+    // Album (left-aligned, compact and full only).
+    if view != ViewPreset::Minimal {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(col_text(&t.album, cols.album), album_style));
+    }
+
+    // Title column: track_no prefix + title, left-aligned as a unit.
+    // track_no keeps its own style; title is truncated/padded to fill.
+    spans.push(Span::raw(" "));
+    let track_no_len = disp_width(&track_no);
+    let title_avail = cols.title.saturating_sub(track_no_len);
+    let title_disp = if disp_width(&title) <= title_avail {
+        title.clone()
+    } else {
+        truncate(title, title_avail)
     };
+    let title_pad = cols
+        .title
+        .saturating_sub(track_no_len + disp_width(&title_disp));
+    spans.push(Span::styled(track_no, track_style));
+    spans.push(Span::styled(title_disp, title_style));
+    spans.push(Span::raw(" ".repeat(title_pad)));
 
-    // Calculate the visible width of the left content.
-    let left_len: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    // Year (right-aligned, full only).
+    if view == ViewPreset::Full {
+        spans.push(Span::raw(" "));
+        let year_str = if t.year > 0 {
+            t.year.to_string()
+        } else {
+            String::new()
+        };
+        spans.push(Span::styled(col_num(&year_str, cols.year), year_style));
+    }
 
-    // Pad between left content and right-aligned rating.
-    let rating_len = rating.chars().count() + 1; // +1 for leading space
+    // Genre (left-aligned, full only).
+    if view == ViewPreset::Full {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(col_text(&t.genre, cols.genre), genre_style));
+    }
+
+    // Duration (right-aligned).
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(col_num(&dur, cols.duration), dur_style));
+
+    // Right-aligned rating.
+    let left_len: usize = spans.iter().map(|s| disp_width(&s.content)).sum();
+    let rating_len = disp_width(&rating) + 1;
     let pad = width.saturating_sub(left_len + rating_len);
-
-    let mut spans = left;
     spans.push(Span::raw(" ".repeat(pad)));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(rating, rating_style));
@@ -371,7 +410,7 @@ fn draw_albums(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(selected));
+    center_select(&mut state, selected, albums.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -396,7 +435,7 @@ fn draw_artists(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(selected));
+    center_select(&mut state, selected, artists.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -429,7 +468,7 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(selected));
+    center_select(&mut state, selected, rows.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -466,7 +505,7 @@ fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    state.select(Some(selected));
+    center_select(&mut state, selected, playlists.len(), area);
     f.render_stateful_widget(list, area, &mut state);
 }
 
