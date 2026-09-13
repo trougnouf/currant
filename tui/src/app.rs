@@ -68,10 +68,16 @@ pub enum QueueKind {
 }
 
 /// Tracks of an expanded album or artist. `v` toggles in/out.
+/// For artists, the expand goes through two levels: first albums, then
+/// tracks of the selected album (`drilled = true`).
 #[derive(Debug, Clone)]
 pub struct ExpandedView {
     pub kind: ExpandKind,
     pub tracks: Vec<Track>,
+    /// Albums of an expanded artist (empty for album kind).
+    pub albums: Vec<Album>,
+    /// True when showing tracks instead of the album list (artist only).
+    pub drilled: bool,
     pub selection: usize,
     pub label: String,
 }
@@ -593,8 +599,11 @@ impl App {
     }
 
     fn current_total(&self) -> usize {
-        if self.expanded.is_some() {
-            return self.expanded.as_ref().map(|e| e.tracks.len()).unwrap_or(0);
+        if let Some(e) = &self.expanded {
+            if e.drilled {
+                return e.tracks.len();
+            }
+            return e.albums.len();
         }
         match self.tab {
             Tab::Tracks => self.tracks.total as usize,
@@ -655,7 +664,14 @@ impl App {
 
     fn selected_track_id(&self, c: &MutexGuard<'_, PlayerController>) -> Option<String> {
         if let Some(e) = &self.expanded {
-            return e.tracks.get(e.selection).map(|t| t.id.clone());
+            if e.drilled {
+                return e.tracks.get(e.selection).map(|t| t.id.clone());
+            }
+            // Album list level: resolve to first track of selected album.
+            return e
+                .albums
+                .get(e.selection)
+                .and_then(|a| c.store.album_tracks(&a.album).first().map(|t| t.id.clone()));
         }
         match self.tab {
             Tab::Tracks => self
@@ -674,12 +690,10 @@ impl App {
         .or_else(|| {
             // Albums/artists: resolve the first track of the selection.
             match self.tab {
-                Tab::Albums => self.albums.get(self.sel_albums).and_then(|a| {
-                    c.store
-                        .album_tracks(&a.artist, &a.album)
-                        .first()
-                        .map(|t| t.id.clone())
-                }),
+                Tab::Albums => self
+                    .albums
+                    .get(self.sel_albums)
+                    .and_then(|a| c.store.album_tracks(&a.album).first().map(|t| t.id.clone())),
                 Tab::Artists => self
                     .artists
                     .get(self.sel_artists)
@@ -691,10 +705,19 @@ impl App {
 
     fn activate(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         if let Some(e) = &self.expanded {
-            // Expanded: play the selected individual track.
-            if let Some(id) = self.selected_track_id(c) {
-                c.dispatch(PlayerIntent::PlayTrack { id });
-                self.status = format!("playing: {}", e.label);
+            if e.drilled {
+                // Track level: play the selected individual track.
+                if let Some(id) = self.selected_track_id(c) {
+                    c.dispatch(PlayerIntent::PlayTrack { id });
+                    self.status = format!("playing: {}", e.label);
+                }
+            } else {
+                // Album list level: play the selected album.
+                if let Some(a) = e.albums.get(e.selection).cloned() {
+                    let tracks = c.store.album_tracks(&a.album);
+                    play_sequence(c, tracks);
+                    self.status = format!("playing album: {}", a.album);
+                }
             }
             return;
         }
@@ -712,7 +735,7 @@ impl App {
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.artist, &a.album);
+                    let tracks = c.store.album_tracks(&a.album);
                     play_sequence(c, tracks);
                     self.status = format!("playing album: {} - {}", a.artist, a.album);
                 }
@@ -734,10 +757,20 @@ impl App {
     }
 
     fn enqueue_selected(&mut self, c: &mut MutexGuard<'_, PlayerController>, next: bool) {
-        if self.expanded.is_some() {
-            if let Some(id) = self.selected_track_id(c) {
-                c.dispatch(PlayerIntent::Enqueue { id, next });
-                self.status = if next { "play next" } else { "queued" }.into();
+        if let Some(e) = &self.expanded {
+            if e.drilled {
+                // Track level: enqueue the selected track.
+                if let Some(id) = self.selected_track_id(c) {
+                    c.dispatch(PlayerIntent::Enqueue { id, next });
+                    self.status = if next { "play next" } else { "queued" }.into();
+                }
+            } else {
+                // Album list level: enqueue the selected album.
+                if let Some(a) = e.albums.get(e.selection).cloned() {
+                    let tracks = c.store.album_tracks(&a.album);
+                    enqueue_sequence(c, tracks, next);
+                    self.status = if next { "album next" } else { "album queued" }.into();
+                }
             }
             return;
         }
@@ -750,7 +783,7 @@ impl App {
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.artist, &a.album);
+                    let tracks = c.store.album_tracks(&a.album);
                     enqueue_sequence(c, tracks, next);
                     self.status = if next { "album next" } else { "album queued" }.into();
                 }
@@ -846,11 +879,7 @@ impl App {
                 }
             }
             Tab::Albums => {
-                if let Some(idx) = self
-                    .albums
-                    .iter()
-                    .position(|a| a.artist == np.album_artist && a.album == np.album)
-                {
+                if let Some(idx) = self.albums.iter().position(|a| a.album == np.album) {
                     self.sel_albums = idx;
                     self.expanded = None;
                     self.status = "jumped to playing album".into();
@@ -874,20 +903,35 @@ impl App {
     }
 
     fn toggle_expand(&mut self, c: &MutexGuard<'_, PlayerController>) {
-        // If already expanded, collapse.
-        if self.expanded.is_some() {
-            self.expanded = None;
-            self.status.clear();
+        // If already expanded, advance to the next state or collapse.
+        if let Some(e) = self.expanded.as_mut() {
+            if e.kind == ExpandKind::Artist && !e.drilled {
+                // Album list -> drill into selected album's tracks.
+                if let Some(a) = e.albums.get(e.selection).cloned() {
+                    let tracks = c.store.album_tracks(&a.album);
+                    e.tracks = tracks;
+                    e.drilled = true;
+                    e.selection = 0;
+                    self.status = "v: album tracks (v to collapse)".into();
+                }
+            } else {
+                // Track level (or album kind) -> collapse.
+                self.expanded = None;
+                self.status.clear();
+            }
             return;
         }
+        // Not expanded: expand.
         match self.tab {
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.artist, &a.album);
+                    let tracks = c.store.album_tracks(&a.album);
                     let label = format!("{} - {}", a.artist, a.album);
                     self.expanded = Some(ExpandedView {
                         kind: ExpandKind::Album,
                         tracks,
+                        albums: Vec::new(),
+                        drilled: true,
                         selection: 0,
                         label,
                     });
@@ -896,15 +940,17 @@ impl App {
             }
             Tab::Artists => {
                 if let Some(a) = self.artists.get(self.sel_artists).cloned() {
-                    let tracks = c.store.artist_tracks(&a.name);
+                    let albums = c.store.artist_albums(&a.name);
                     let label = a.name.clone();
                     self.expanded = Some(ExpandedView {
                         kind: ExpandKind::Artist,
-                        tracks,
+                        tracks: Vec::new(),
+                        albums,
+                        drilled: false,
                         selection: 0,
                         label,
                     });
-                    self.status = "v: expanded artist (v to collapse)".into();
+                    self.status = "v: artist albums (v: expand album, Enter: play)".into();
                 }
             }
             _ => {}

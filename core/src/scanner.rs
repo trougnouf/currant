@@ -8,6 +8,7 @@ use crate::model::Track;
 use crate::store::LibraryStore;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
+use lofty::tag::items::popularimeter::Popularimeter;
 use lofty::tag::{Accessor, ItemKey};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -194,16 +195,25 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         })
         .unwrap_or(0);
 
-    // Read an existing POPM-style rating when present so a rescan does not
-    // clobber ratings the user set elsewhere.
+    // Read an existing rating when present so a rescan does not clobber
+    // ratings the user set elsewhere. Uses lofty's ratings() which handles
+    // all formats (ID3v2 POPM, Vorbis RATING, MP4 rate) and provider scales
+    // (MusicBee, WMP, Picard, default).
     let rating = tag
-        .and_then(|t| {
-            t.get_string(ItemKey::Popularimeter)
-                .and_then(|s| s.split(':').next())
-                .and_then(|s| s.parse::<u8>().ok())
-        })
-        .map(|r| r.min(5))
+        .and_then(|t| t.ratings().next())
+        .map(|p: Popularimeter<'_>| p.rating() as u8)
         .unwrap_or(0);
+
+    // Lofty doesn't recognize FMPS_RATING/FMPS_PLAYCOUNT (used by
+    // Strawberry/Clementine/Amarok in Vorbis comments). Parse the raw
+    // comment block as a fallback for FLAC/OGG/Opus files.
+    let (fmps_rating, fmps_play_count) = crate::vorbis_ext::read_fmps_fields(path);
+    let rating = if rating > 0 { rating } else { fmps_rating };
+    let play_count = if fmps_play_count > 0 {
+        fmps_play_count
+    } else {
+        0
+    };
 
     let duration_secs = properties.duration().as_secs() as u32;
 
@@ -220,7 +230,7 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         year,
         duration_secs,
         rating,
-        play_count: 0,
+        play_count,
         last_played: None,
         file_mtime: mtime,
     })

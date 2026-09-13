@@ -290,35 +290,34 @@ impl LibraryStore {
             format!("WHERE {}", frag.where_clause)
         };
 
-        // Pick a random album (artist, album) pair.
+        // Pick a random album by name.
         let pick_sql = format!(
-            "SELECT album_artist, album FROM tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
+            "SELECT album FROM tracks {where_sql} GROUP BY album ORDER BY RANDOM() LIMIT 1"
         );
-        let pair: Option<(String, String)> = if frag.where_clause.is_empty() {
-            conn.query_row(&pick_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
-                .ok()
+        let album_name: Option<String> = if frag.where_clause.is_empty() {
+            conn.query_row(&pick_sql, [], |row| row.get(0)).ok()
         } else {
             conn.query_row(
                 &pick_sql,
                 params_from_iter(params_as_dyn(&frag.params)),
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .ok()
         };
 
-        let Some((artist, album)) = pair else {
+        let Some(album) = album_name else {
             return Vec::new();
         };
 
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE album_artist = ?1 AND album = ?2
+                   FROM tracks WHERE album = ?1
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = match stmt.query(rusqlite::params![artist, album]) {
+        let rows = match stmt.query(rusqlite::params![album]) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
@@ -339,11 +338,17 @@ impl LibraryStore {
             format!("WHERE {}", frag.where_clause)
         };
         let sql = format!(
-            "SELECT album_artist, album, MAX(year) AS year, COUNT(*) AS track_count,
-                    SUM(duration_secs) AS total
+            "SELECT
+                CASE
+                    WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
+                    THEN MIN(album_artist)
+                    ELSE 'Various Artists'
+                END AS artist,
+                album, MAX(year) AS year, COUNT(*) AS track_count,
+                SUM(duration_secs) AS total
              FROM tracks {where_sql}
-             GROUP BY album_artist, album
-             ORDER BY album_artist, album"
+             GROUP BY album
+             ORDER BY artist, album"
         );
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
@@ -414,19 +419,19 @@ impl LibraryStore {
         out
     }
 
-    /// Tracks for a single album (album_artist + album), in track order.
-    pub fn album_tracks(&self, artist: &str, album: &str) -> Vec<Track> {
+    /// Tracks for a single album, in track order.
+    pub fn album_tracks(&self, album: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE album_artist = ?1 AND album = ?2
+                   FROM tracks WHERE album = ?1
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         let mut out = Vec::new();
-        let rows = stmt.query(rusqlite::params![artist, album]).unwrap();
+        let rows = stmt.query(rusqlite::params![album]).unwrap();
         for t in rows.mapped(row_to_track).flatten() {
             out.push(t);
         }
@@ -448,6 +453,43 @@ impl LibraryStore {
         let rows = stmt.query(rusqlite::params![artist]).unwrap();
         for t in rows.mapped(row_to_track).flatten() {
             out.push(t);
+        }
+        out
+    }
+
+    /// Albums for a single artist, aggregated by album name.
+    pub fn artist_albums(&self, artist: &str) -> Vec<Album> {
+        let conn = self.read_conn();
+        let sql = "SELECT
+                CASE
+                    WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
+                    THEN MIN(album_artist)
+                    ELSE 'Various Artists'
+                END AS artist,
+                album, MAX(year) AS year, COUNT(*) AS track_count,
+                SUM(duration_secs) AS total
+             FROM tracks WHERE artist = ?1
+             GROUP BY album
+             ORDER BY MIN(album), album";
+        let mut stmt = match conn.prepare(sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        let rows = stmt.query(rusqlite::params![artist]).unwrap();
+        for a in rows
+            .mapped(|row| {
+                Ok(Album {
+                    artist: row.get(0)?,
+                    album: row.get(1)?,
+                    year: row.get::<_, i64>(2).unwrap_or(0) as u32,
+                    track_count: row.get::<_, i64>(3).unwrap_or(0) as u32,
+                    total_duration_secs: row.get::<_, i64>(4).unwrap_or(0) as u32,
+                })
+            })
+            .flatten()
+        {
+            out.push(a);
         }
         out
     }

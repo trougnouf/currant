@@ -147,6 +147,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedView) {
+    if !e.drilled && e.kind == ExpandKind::Artist {
+        draw_expanded_albums(f, app, area, e);
+        return;
+    }
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
     let width = area.width.saturating_sub(6) as usize;
     let rows: Vec<ListItem> = e
@@ -156,12 +160,51 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
         .collect();
     let prefix = match e.kind {
         ExpandKind::Album => "album tracks",
-        ExpandKind::Artist => "artist tracks",
+        ExpandKind::Artist => "artist album tracks",
     };
     let title = format!(
         "{prefix}: {} - {} tracks (v: collapse)",
         e.label,
         e.tracks.len()
+    );
+    let list = List::new(rows)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(Style::default().fg(theme::TITLE)),
+        )
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
+        .highlight_symbol(">> ");
+    let mut state = ListState::default();
+    state.select(Some(e.selection));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+/// Album list within an expanded artist.
+fn draw_expanded_albums(f: &mut Frame, _app: &App, area: Rect, e: &crate::app::ExpandedView) {
+    let rows: Vec<ListItem> = e
+        .albums
+        .iter()
+        .map(|a| {
+            let year = if a.year > 0 {
+                format!(" [{}] ", a.year)
+            } else {
+                " ".to_string()
+            };
+            ListItem::new(format!(
+                "{}{}({} tracks, {})",
+                a.album,
+                year,
+                a.track_count,
+                fmt_duration(a.total_duration_secs)
+            ))
+        })
+        .collect();
+    let title = format!(
+        "artist albums: {} - {} albums (v: expand  Enter: play)",
+        e.label,
+        e.albums.len()
     );
     let list = List::new(rows)
         .block(
@@ -288,15 +331,16 @@ fn draw_albums(f: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<ListItem> = albums
         .iter()
         .map(|a| {
+            let year = if a.year > 0 {
+                format!(" [{}] ", a.year)
+            } else {
+                " ".to_string()
+            };
             ListItem::new(format!(
-                "{} - {} [{}] ({} tracks, {})",
+                "{} - {}{}({} tracks, {})",
                 a.artist,
                 a.album,
-                if a.year > 0 {
-                    a.year.to_string()
-                } else {
-                    "?".into()
-                },
+                year,
                 a.track_count,
                 fmt_duration(a.total_duration_secs)
             ))
