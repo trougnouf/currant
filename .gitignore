@@ -40,3 +40,7 @@ __pycache__
 radicale_analysis/
 
 music/
+
+# AUR PKGBUILD — not ready to commit yet (pending local build verification)
+packaging/arch/PKGBUILD-cassis-git
+assets/doodling/
