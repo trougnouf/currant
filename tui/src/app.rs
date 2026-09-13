@@ -163,6 +163,9 @@ pub struct App {
     /// Expanded album/artist view: the selected album/artist's tracks.
     expanded: Option<ExpandedView>,
 
+    /// Last seen now-playing track id, to detect track changes for auto-jump.
+    prev_playing_id: Option<String>,
+
     // view model rebuilt each refresh
     pub now_playing: Option<Track>,
     pub is_playing: bool,
@@ -205,6 +208,7 @@ impl App {
             sel_playlists: 0,
             queue_rows: Vec::new(),
             expanded: None,
+            prev_playing_id: None,
             now_playing: None,
             is_playing: false,
             stop_after: false,
@@ -241,6 +245,17 @@ impl App {
         self.radio_sort = Some(c.dynamic_sort());
         self.volume = c.volume;
         self.smart_playlists = c.smart_playlists().to_vec();
+
+        // Auto-jump to the playing track when it changes (next/prev/skip).
+        let playing_id = self.now_playing.as_ref().map(|t| t.id.clone());
+        if playing_id != self.prev_playing_id {
+            self.prev_playing_id = playing_id.clone();
+            // Only auto-jump when a track is playing and we're not in
+            // search mode (typing would fight the selection).
+            if playing_id.is_some() && !self.in_search {
+                self.jump_to_playing();
+            }
+        }
 
         // While a scan is running, show live progress in the status bar.
         // Lists are NOT refreshed during the scan (the read connection serves
