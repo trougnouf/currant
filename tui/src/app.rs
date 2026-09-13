@@ -614,7 +614,12 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc => return true,
+            KeyCode::Char('q') => return true,
+            KeyCode::Esc => {
+                if self.help {
+                    self.help = false;
+                }
+            }
             KeyCode::Tab => {
                 self.tab = self.tab.next();
                 self.expanded = None;
@@ -637,7 +642,7 @@ impl App {
             KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
             KeyCode::Char('>') | KeyCode::Char('.') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('<') | KeyCode::Char(',') => c.dispatch(PlayerIntent::PreviousTrack),
-            KeyCode::Char('q') => self.enqueue_selected(c, false),
+            KeyCode::Char('e') => self.enqueue_selected(c, false),
             KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('N') => self.enqueue_selected(c, true),
             KeyCode::Char('x') => self.remove_from_queue(c),

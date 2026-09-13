@@ -610,18 +610,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  ?:help  Ctrl+J:jump to playing  Ctrl+C:quit";
+    let universal = "  Tab:tabs  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  e:queue  ?:help  q:quit  Ctrl+J:jump to playing";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
-            "Enter:play  q:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
+            "Enter:play  e:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
         }
         Tab::Albums => {
-            "Enter:play album  v:expand  q:queue album  N:play-next  d:details  c:view  s:sort  r:radio"
+            "Enter:play album  v:expand  e:queue album  N:play-next  d:details  c:view  s:sort  r:radio"
         }
         Tab::Artists => {
-            "Enter:play artist  v:expand  q:queue artist  N:play-next  d:details  c:view  s:sort  r:radio"
+            "Enter:play artist  v:expand  e:queue artist  N:play-next  d:details  c:view  s:sort  r:radio"
         }
-        Tab::Queue => "Enter:jump to  x:remove  s:stop-after  d:details  c:view",
+        Tab::Queue => "Enter:jump to  x:remove  S:stop-after  d:details  c:view",
         Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
     };
     format!("{actions}{universal}")
@@ -634,43 +634,54 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         .title_style(Style::default().fg(theme::TITLE))
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
-    let mut text = String::from(
-        "\
-/search            filter the current tab (Esc to leave)
-Tab / Shift+Tab    switch tabs
-j k / arrows       move selection    PgUp/PgDn jump
-Enter             play / activate playlist (playlists tab)
-v                 expand album/artist to browse tracks (v again to collapse)
-q                 enqueue (append)        N play next
-x                 remove from queue (queue tab) / delete playlist (playlists tab)
-S                 stop after current
-1-5 / 0           rate (0 clears)
-c                 cycle columns (view preset)
-s                 cycle sort            r/R toggle radio (random / random-album)
-p n <             play/pause, next, previous
-+/-               volume up/down
-</> (h/l)         seek backward/forward 5s    H/L seek 30s
-P                 save current search as a smart playlist
-g1-9              activate saved playlist by index (or use playlists tab)
-d                 show track details (path, metadata, etc.)
-Ctrl+J            jump to currently playing track in the list
-Ctrl+C / Esc      quit
-
-search syntax:
-  free text           matches title, artist, album
-  ar:pink / artist:pink   artist contains 'pink'
-  al:=kind of blue / album:=kind of blue   album equals exactly
-  t:-love / title:-love   title does not contain 'love'
-  #jazz / genre:jazz       genre contains 'jazz'
-  year:>=1990              year >= 1990
-  *>=4 / rating:>=4        rating >= 4 stars
-  ~>5m / length:>5m        duration > 5 minutes
-  p:0 / playcount:0        play count = 0 (never played)
-  -term              exclude (NOT)
-  a | b              either (OR)
-  (a b)              grouping (implicit AND)
-",
-    );
+    let mut text = String::new();
+    let bindings: [(&str, &str); 24] = [
+        ("/search", "filter the current tab (Esc to leave)"),
+        ("Tab / Shift+Tab", "switch tabs"),
+        ("j k / arrows", "move selection (PgUp/PgDn jump 20)"),
+        ("Enter", "play / activate playlist (playlists tab)"),
+        ("v", "expand album/artist (v again to collapse)"),
+        ("e", "enqueue (append to queue)"),
+        ("N", "play next (front of queue)"),
+        ("x", "remove from queue / delete playlist"),
+        ("S", "stop after current"),
+        ("0-5", "rate track (0 clears)"),
+        ("c", "cycle columns (minimal / compact / full)"),
+        ("s", "cycle sort"),
+        ("r / R", "toggle radio (random / random-album)"),
+        ("p", "play / pause"),
+        ("n > .", "next track"),
+        ("< ,", "previous track"),
+        ("+ -", "volume up / down"),
+        ("</> (h/l)", "seek backward / forward 5s"),
+        ("H L", "seek backward / forward 30s"),
+        ("P", "save current search as a smart playlist"),
+        ("g1-9", "activate saved playlist by index"),
+        ("d", "show track details (path, metadata, etc.)"),
+        ("Ctrl+J", "jump to currently playing track in the list"),
+        ("q", "quit (Esc closes overlays)"),
+    ];
+    for (key, desc) in bindings {
+        text.push_str(&format!("{key:<20} {desc}\n"));
+    }
+    text.push_str("\nsearch syntax:\n");
+    let syntax: [(&str, &str); 12] = [
+        ("free text", "matches title, artist, album"),
+        ("ar:pink / artist:pink", "artist contains 'pink'"),
+        ("al:=blue / album:=blue", "album equals exactly"),
+        ("t:-love / title:-love", "title does not contain 'love'"),
+        ("#jazz / genre:jazz", "genre contains 'jazz'"),
+        ("year:>=1990", "year >= 1990"),
+        ("*>=4 / rating:>=4", "rating >= 4 stars"),
+        ("~>5m / length:>5m", "duration > 5 minutes"),
+        ("p:0 / playcount:0", "play count = 0 (never played)"),
+        ("-term", "exclude (NOT)"),
+        ("a | b", "either (OR)"),
+        ("(a b)", "grouping (implicit AND)"),
+    ];
+    for (key, desc) in syntax {
+        text.push_str(&format!("  {key:<24} {desc}\n"));
+    }
     if !app.smart_playlists.is_empty() {
         text.push_str("\nsaved playlists (g+N or playlists tab):\n");
         for (i, pl) in app.smart_playlists.iter().take(9).enumerate() {

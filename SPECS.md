@@ -170,20 +170,19 @@ Metadata is read and written by lofty 0.25.
 | `j` `k` / arrows | move selection (PgUp/PgDn jump 20) |
 | `Home` / `End` | first / last |
 | `Enter` | play selection (track, album, artist) / jump to queue row / activate playlist |
-| `q` | enqueue (append to queue) |
-| `n` | play next (front of queue) |
+| `e` | enqueue (append to queue) |
+| `N` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `d` | show track details (path, metadata, etc.) |
 | `v` | expand album/artist to browse tracks (albums/artists tab, `v` again to collapse) |
 | `Ctrl+J` | jump to the currently playing track in the current tab |
-| `s` | stop after current |
+| `S` | stop after current |
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full) |
-| `r` | cycle sort |
-| `m` | set radio from current search |
-| `R` | random-album radio |
+| `s` | cycle sort |
+| `r` `R` | toggle radio (random / random-album) |
 | `p` | play / pause |
-| `>` `.` | next track |
+| `n` `>` `.` | next track |
 | `<` `,` | previous track |
 | `+` `-` | volume up / down |
 | `Left` `Right` / `h` `l` | seek backward / forward 5s |
@@ -191,7 +190,8 @@ Metadata is read and written by lofty 0.25.
 | `P` | save current search as a smart playlist |
 | `g1`-`g9` | activate saved playlist by index |
 | `?` | help overlay (search syntax + playlists) |
-| `Ctrl+C` / `Esc` | quit |
+| `q` / `Ctrl+C` | quit |
+| `Esc` | close help / details overlay, exit search mode |
 
 ### 6.3. View presets
 
