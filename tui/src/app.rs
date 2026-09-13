@@ -549,6 +549,13 @@ impl App {
 
     // --- input ---
 
+    /// Switch to a tab, resetting expansion and marking the view dirty.
+    fn switch_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        self.expanded = None;
+        self.dirty = true;
+    }
+
     /// Handle a key. Returns true to quit. `c` is the locked controller.
     pub fn handle_key(
         &mut self,
@@ -625,16 +632,14 @@ impl App {
                     self.help = false;
                 }
             }
-            KeyCode::Tab => {
-                self.tab = self.tab.next();
-                self.expanded = None;
-                self.dirty = true;
-            }
-            KeyCode::BackTab => {
-                self.tab = self.tab.prev();
-                self.expanded = None;
-                self.dirty = true;
-            }
+            KeyCode::Tab => self.switch_tab(self.tab.next()),
+            KeyCode::BackTab => self.switch_tab(self.tab.prev()),
+            KeyCode::F(1) => self.switch_tab(Tab::Tracks),
+            KeyCode::F(2) => self.switch_tab(Tab::Albums),
+            KeyCode::F(3) => self.switch_tab(Tab::Artists),
+            KeyCode::F(4) => self.switch_tab(Tab::Queue),
+            KeyCode::F(5) => self.switch_tab(Tab::Playlists),
+            KeyCode::F(6) => self.switch_tab(Tab::Files),
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-20),

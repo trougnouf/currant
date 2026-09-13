@@ -610,7 +610,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  e:queue  ?:help  q:quit  Ctrl+J:jump to playing";
+    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  e:queue  ?:help  q:quit  Ctrl+J:jump to playing";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
             "Enter:play  e:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
@@ -635,9 +635,13 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::new();
-    let bindings: [(&str, &str); 24] = [
+    let bindings: [(&str, &str); 25] = [
         ("/search", "filter the current tab (Esc to leave)"),
         ("Tab / Shift+Tab", "switch tabs"),
+        (
+            "F1-F6",
+            "jump to tab (Tracks/Albums/Artists/Queue/Playlists/Files)",
+        ),
         ("j k / arrows", "move selection (PgUp/PgDn jump 20)"),
         ("Enter", "play / activate playlist (playlists tab)"),
         ("v", "expand album/artist (v again to collapse)"),
