@@ -3,12 +3,20 @@
 name = "framboise-tui"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal music player for Framboise."
+license = "GPL-3.0-or-later"
 
 [dependencies]
 framboise-core = { path = "../core" }
-tokio = { workspace = true }
 ratatui = "0.26"
 crossterm = "0.29"
-# rodio uses symphonia internally to decode flac/mp3/ogg/opus
-rodio = { version = "0.18", default-features = false, features = ["symphonia-all"] }
-walkdir = "2.5" # For our quick testing library scanner
+dirs = "6"
+# rodio uses symphonia internally to decode flac/mp3/ogg(vorbis)/wav.
+rodio = { version = "0.18", default-features = false, features = ["symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-wav"] }
+ogg = { version = "0.9", optional = true }
+opus = { version = "0.4", optional = true }
+
+[features]
+default = ["opus"]
+# Enables .opus playback via libopus + the ogg demuxer (needs libopus/libogg).
+opus = ["dep:ogg", "dep:opus"]
