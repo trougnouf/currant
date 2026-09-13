@@ -41,7 +41,7 @@ mod theme {
     pub const POPUP_BORDER: Color = Color::Cyan;
 }
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -50,6 +50,8 @@ pub fn draw(f: &mut Frame, app: &App) {
             Constraint::Length(5), // now playing + progress + status
         ])
         .split(f.area());
+
+    app.sync_scroll(chunks[1].height);
 
     draw_header(f, app, chunks[0]);
     draw_list(f, app, chunks[1]);
@@ -67,17 +69,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-/// Select an item and center it in the visible area by setting the scroll
-/// offset manually. The list renderer only adjusts offset when the selected
-/// item is outside the visible range, so a pre-set offset that keeps the
-/// selection visible is respected.
-fn center_select(state: &mut ListState, selected: usize, total: usize, area: Rect) {
+/// Set the ListState selection and offset from the App's scroll_offset.
+/// The offset is clamped so the selection stays visible.
+fn apply_scroll(state: &mut ListState, selected: usize, total: usize, area: Rect, offset: usize) {
     state.select(Some(selected));
     let visible = area.height.saturating_sub(2) as usize; // borders
-    let half = visible / 2;
     let max_offset = total.saturating_sub(visible);
-    let offset = selected.saturating_sub(half).min(max_offset);
-    *state.offset_mut() = offset;
+    *state.offset_mut() = offset.min(max_offset);
 }
 
 /// A centered rect inside `area` with the given width/height percentages.
@@ -203,12 +201,18 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, e.selection, e.tracks.len(), area);
+    apply_scroll(
+        &mut state,
+        e.selection,
+        e.tracks.len(),
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 
 /// Album list within an expanded artist.
-fn draw_expanded_albums(f: &mut Frame, _app: &App, area: Rect, e: &crate::app::ExpandedView) {
+fn draw_expanded_albums(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedView) {
     let rows: Vec<ListItem> = e
         .albums
         .iter()
@@ -242,7 +246,13 @@ fn draw_expanded_albums(f: &mut Frame, _app: &App, area: Rect, e: &crate::app::E
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, e.selection, e.albums.len(), area);
+    apply_scroll(
+        &mut state,
+        e.selection,
+        e.albums.len(),
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -279,7 +289,13 @@ fn draw_tracks(
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, selected, total as usize, area);
+    apply_scroll(
+        &mut state,
+        selected,
+        total as usize,
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -410,7 +426,13 @@ fn draw_albums(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, selected, albums.len(), area);
+    apply_scroll(
+        &mut state,
+        selected,
+        albums.len(),
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -435,7 +457,13 @@ fn draw_artists(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, selected, artists.len(), area);
+    apply_scroll(
+        &mut state,
+        selected,
+        artists.len(),
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -468,7 +496,7 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, selected, rows.len(), area);
+    apply_scroll(&mut state, selected, rows.len(), area, app.scroll_offset());
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -505,7 +533,13 @@ fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
-    center_select(&mut state, selected, playlists.len(), area);
+    apply_scroll(
+        &mut state,
+        selected,
+        playlists.len(),
+        area,
+        app.scroll_offset(),
+    );
     f.render_stateful_widget(list, area, &mut state);
 }
 

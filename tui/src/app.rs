@@ -217,6 +217,13 @@ pub struct App {
 
     dirty: bool,
 
+    /// ListState offset for the currently visible list (relative to the
+    /// items array, not the catalog). When `follow` is true the renderer
+    /// re-centers on the selection every frame; when false it keeps this
+    /// offset, adjusting only if the selection leaves the viewport.
+    scroll_offset: usize,
+    follow: bool,
+
     // --- column-width debounce state ---
     col_widths: ColumnWidths,
     col_structural: ColStructuralKey,
@@ -259,6 +266,8 @@ impl App {
             last_mouse_click: None,
             scan_progress: None,
             dirty: true,
+            scroll_offset: 0,
+            follow: true,
             col_widths: ColumnWidths::default(),
             col_structural: (Tab::Tracks, ViewPreset::Compact, false, String::new()),
             col_scroll: (0, 0),
@@ -336,6 +345,8 @@ impl App {
         // invalidated (new search, sort change, etc.).
         if self.dirty {
             self.expanded = None;
+            self.scroll_offset = 0;
+            self.follow = true;
         }
         self.dirty = false;
     }
@@ -456,6 +467,72 @@ impl App {
         self.expanded.as_ref()
     }
 
+    /// Current ListState offset (relative to the items array) for the renderer.
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// (selected, items_len) matching what the render path passes to the ListState.
+    fn list_state_dims(&self) -> (usize, usize) {
+        if let Some(e) = &self.expanded {
+            if e.drilled || e.kind == ExpandKind::Album {
+                return (e.selection, e.tracks.len());
+            }
+            return (e.selection, e.albums.len());
+        }
+        match self.tab {
+            Tab::Tracks => (self.tracks.list_index(), self.tracks.items.len()),
+            Tab::Files => (self.files.list_index(), self.files.items.len()),
+            Tab::Albums => (self.sel_albums, self.albums.len()),
+            Tab::Artists => (self.sel_artists, self.artists.len()),
+            Tab::Queue => (self.sel_queue, self.queue_rows.len()),
+            Tab::Playlists => (self.sel_playlists, self.smart_playlists.len()),
+        }
+    }
+
+    /// Absolute index (in the catalog) of the first visible row, for click hit-testing.
+    fn absolute_scroll_offset(&self) -> usize {
+        if self.expanded.is_some() {
+            return self.scroll_offset;
+        }
+        match self.tab {
+            Tab::Tracks => self.tracks.offset.saturating_add(self.scroll_offset),
+            Tab::Files => self.files.offset.saturating_add(self.scroll_offset),
+            _ => self.scroll_offset,
+        }
+    }
+
+    /// Reconcile `scroll_offset` with the current selection. When `follow` is
+    /// true, center the selection; otherwise keep the offset and only adjust
+    /// if the selection has left the viewport. Called once per frame from `draw`.
+    pub fn sync_scroll(&mut self, area_height: u16) {
+        let visible = area_height.saturating_sub(2) as usize; // borders
+        if visible == 0 {
+            return;
+        }
+        let (selected, total) = self.list_state_dims();
+        if total == 0 {
+            self.scroll_offset = 0;
+            return;
+        }
+        let max_offset = total.saturating_sub(visible);
+        if self.follow {
+            let half = visible / 2;
+            self.scroll_offset = selected.saturating_sub(half).min(max_offset);
+        } else {
+            let offset = self.scroll_offset.min(max_offset);
+            if selected < offset {
+                self.scroll_offset = selected;
+            } else if selected >= offset + visible {
+                self.scroll_offset = selected
+                    .saturating_sub(visible.saturating_sub(1))
+                    .min(max_offset);
+            } else {
+                self.scroll_offset = offset;
+            }
+        }
+    }
+
     pub fn col_widths(&self) -> ColumnWidths {
         self.col_widths
     }
@@ -499,14 +576,9 @@ impl App {
             if items.is_empty() {
                 None
             } else {
-                // Slice the visible rows from the window. `selection` is the
-                // absolute index; `offset` is the window's first item index.
-                // The on-screen position is `selection - offset` (the list_index).
-                let list_index = selection.saturating_sub(offset);
-                // center_select puts the selection at visible_rows/2, so the
-                // visible slice starts at list_index - visible_rows/2.
-                let half = visible_rows / 2;
-                let vis_start = list_index.saturating_sub(half);
+                // Slice the visible rows from the window using the scroll
+                // offset (relative to the items array).
+                let vis_start = self.scroll_offset;
                 let vis_end = (vis_start + visible_rows).min(items.len());
                 let vis_items = &items[vis_start.min(items.len())..vis_end];
 
@@ -553,6 +625,8 @@ impl App {
     fn switch_tab(&mut self, tab: Tab) {
         self.tab = tab;
         self.expanded = None;
+        self.scroll_offset = 0;
+        self.follow = true;
         self.dirty = true;
     }
 
@@ -793,6 +867,8 @@ impl App {
             if col as usize >= x && (col as usize) < x + w {
                 self.tab = Tab::ALL[i];
                 self.expanded = None;
+                self.scroll_offset = 0;
+                self.follow = true;
                 self.dirty = true;
                 return;
             }
@@ -819,18 +895,19 @@ impl App {
             return;
         }
 
-        // Compute the scroll offset the same way center_select does in the
-        // renderer, so the row-to-item mapping is consistent.
-        let selected = self.current_selection();
-        let half = visible / 2;
-        let max_offset = total.saturating_sub(visible);
-        let offset = selected.saturating_sub(half).min(max_offset);
-
-        let item_index = offset + content_row;
+        // Use the renderer's scroll offset so the row-to-item mapping is
+        // consistent with what's on screen.
+        let (_, items_len) = self.list_state_dims();
+        let local_row = self.scroll_offset + content_row;
+        if local_row >= items_len {
+            return;
+        }
+        let item_index = self.absolute_scroll_offset() + content_row;
         if item_index >= total {
             return;
         }
 
+        self.follow = false; // keep the view in place on click
         self.set_selection(item_index);
 
         // Double-click activates (play) the item.
@@ -885,6 +962,8 @@ impl App {
     }
 
     fn reset_selection(&mut self) {
+        self.scroll_offset = 0;
+        self.follow = true;
         if let Some(e) = &mut self.expanded {
             e.selection = 0;
             return;
@@ -950,12 +1029,14 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: i64) {
+        self.follow = true;
         let cur = self.current_selection() as i64;
         let next = cur.saturating_add(delta).max(0) as usize;
         self.set_selection(next);
     }
 
     fn move_selection_to(&mut self, i: usize) {
+        self.follow = true;
         self.set_selection(if i == usize::MAX {
             self.current_total().saturating_sub(1)
         } else {
@@ -1154,6 +1235,7 @@ impl App {
     }
 
     fn jump_to_playing(&mut self, store: &LibraryStore) {
+        self.follow = true;
         let Some(np) = &self.now_playing else {
             self.status = "nothing playing".into();
             return;
@@ -1231,11 +1313,15 @@ impl App {
                     e.tracks = tracks;
                     e.drilled = true;
                     e.selection = 0;
+                    self.scroll_offset = 0;
+                    self.follow = true;
                     self.status = "v: album tracks (v to collapse)".into();
                 }
             } else {
                 // Track level (or album kind) -> collapse.
                 self.expanded = None;
+                self.scroll_offset = 0;
+                self.follow = true;
                 self.status.clear();
             }
             return;
@@ -1254,6 +1340,8 @@ impl App {
                         selection: 0,
                         label,
                     });
+                    self.scroll_offset = 0;
+                    self.follow = true;
                     self.status = "v: expanded album (v to collapse)".into();
                 }
             }
@@ -1269,6 +1357,8 @@ impl App {
                         selection: 0,
                         label,
                     });
+                    self.scroll_offset = 0;
+                    self.follow = true;
                     self.status = "v: artist albums (v: expand album, Enter: play)".into();
                 }
             }
