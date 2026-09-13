@@ -35,6 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_year  ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_tracks_path  ON tracks(path);
+CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(artist, album, track_number, title);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 ";

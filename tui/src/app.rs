@@ -87,7 +87,8 @@ impl WindowedView {
     fn invalidate(&mut self) {
         self.items.clear();
         self.offset = 0;
-        self.selection = 0;
+        // Keep selection so the cursor stays where the user left it.
+        // clamp() will snap it back into bounds after ensure() reloads.
     }
 
     fn clamp(&mut self) {
@@ -520,10 +521,8 @@ impl App {
             Tab::Artists => self.sel_artists = i,
             Tab::Queue => self.sel_queue = i,
         }
-        // Force the window to reload if we scrolled off it.
-        if matches!(self.tab, Tab::Tracks | Tab::Files) {
-            self.dirty = true;
-        }
+        // ensure() will reload the window if the selection moved outside it.
+        // No need to set dirty — that would invalidate and reset selection to 0.
     }
 
     fn move_selection(&mut self, delta: i64) {
