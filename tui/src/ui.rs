@@ -148,10 +148,11 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedView) {
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
+    let width = area.width.saturating_sub(6) as usize;
     let rows: Vec<ListItem> = e
         .tracks
         .iter()
-        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id))))
+        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id), width)))
         .collect();
     let prefix = match e.kind {
         ExpandKind::Album => "album tracks",
@@ -185,9 +186,10 @@ fn draw_tracks(
 ) {
     let title = format!("{title} - {} of {} (from #{})", items.len(), total, offset);
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
+    let width = area.width.saturating_sub(6) as usize; // borders + highlight symbol
     let rows: Vec<ListItem> = items
         .iter()
-        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id))))
+        .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id), width)))
         .collect();
     let list = List::new(rows)
         .block(
@@ -203,7 +205,7 @@ fn draw_tracks(
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
+fn track_line(t: &Track, view: ViewPreset, playing: bool, width: usize) -> Line<'_> {
     let marker = if playing { ">" } else { " " };
     let marker_style = if playing {
         Style::default().fg(theme::NOW_PLAYING).bold()
@@ -211,6 +213,7 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
         Style::default()
     };
     let rating = render_rating(t.rating);
+    let rating_style = Style::default().fg(theme::RATING);
     let title = display_title(t);
     let title_style = if playing {
         Style::default().fg(theme::NOW_PLAYING).bold()
@@ -223,7 +226,9 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
     let album_style = Style::default().fg(theme::ALBUM);
     let year_style = Style::default().fg(theme::YEAR);
     let genre_style = Style::default().fg(theme::GENRE);
-    let spans: Vec<Span> = match view {
+
+    // Left content (without rating — rating goes to the right).
+    let left: Vec<Span> = match view {
         ViewPreset::Minimal => vec![
             Span::styled(format!("{marker} "), marker_style),
             Span::styled(title, title_style),
@@ -231,10 +236,7 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
             Span::styled(dur, dur_style),
         ],
         ViewPreset::Compact => vec![
-            Span::styled(
-                format!("{marker} {rating} "),
-                marker_style.fg(theme::RATING),
-            ),
+            Span::styled(format!("{marker} "), marker_style),
             Span::styled(title, title_style),
             Span::raw(" - "),
             Span::styled(t.artist.clone(), artist_style),
@@ -244,10 +246,7 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
             Span::styled(dur, dur_style),
         ],
         ViewPreset::Full => vec![
-            Span::styled(
-                format!("{marker} {rating} "),
-                marker_style.fg(theme::RATING),
-            ),
+            Span::styled(format!("{marker} "), marker_style),
             Span::styled(title, title_style),
             Span::raw(" - "),
             Span::styled(t.artist.clone(), artist_style),
@@ -268,6 +267,19 @@ fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
             Span::styled(dur, dur_style),
         ],
     };
+
+    // Calculate the visible width of the left content.
+    let left_len: usize = left.iter().map(|s| s.content.chars().count()).sum();
+
+    // Pad between left content and right-aligned rating.
+    let rating_len = rating.chars().count() + 1; // +1 for leading space
+    let pad = width.saturating_sub(left_len + rating_len);
+
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(rating, rating_style));
+
     Line::from(spans)
 }
 
