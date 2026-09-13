@@ -87,8 +87,10 @@ impl WindowedView {
     fn invalidate(&mut self) {
         self.items.clear();
         self.offset = 0;
-        // Keep selection so the cursor stays where the user left it.
-        // clamp() will snap it back into bounds after ensure() reloads.
+        self.total = 0;
+        self.selection = 0;
+        // A new search/sort produces a completely different result set;
+        // the old selection and total are meaningless.
     }
 
     fn clamp(&mut self) {

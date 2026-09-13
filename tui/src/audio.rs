@@ -24,7 +24,8 @@ fn scrobble_threshold(duration_secs: u32) -> Duration {
 }
 
 /// Open `path` as a rodio `Source`. Tries symphonia first, then the opus
-/// decoder when the `opus` feature is enabled.
+/// decoder when the `opus` feature is enabled. Sink::append already calls
+/// convert_samples() internally, so we return the raw decoder.
 fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
     let p = Path::new(path);
     if let Ok(file) = File::open(p)
@@ -94,13 +95,19 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                     if started_at.elapsed() >= threshold {
                         controller.lock().unwrap().on_track_completed(&prev);
                     }
-                    sink.clear();
+                    // Skip the old source non-blockingly. skip_one() sets
+                    // a flag that the periodic access checks every 5ms to
+                    // advance to the next source. clear() would block on
+                    // sleep_until_end(); stop() would also block in append().
+                    sink.skip_one();
+                    // Give the skip flag time to propagate before appending.
+                    thread::sleep(Duration::from_millis(10));
                 }
+
                 if let Some(id) = &current {
                     let path = controller.lock().unwrap().store.get_path(id);
                     match path.as_deref().and_then(open_source) {
                         Some(src) => {
-                            // Refresh the threshold for the new track.
                             let dur = controller
                                 .lock()
                                 .unwrap()
@@ -109,7 +116,6 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                                 .map(|t| t.duration_secs)
                                 .unwrap_or(0);
                             threshold = scrobble_threshold(dur);
-                            sink.clear();
                             sink.append(src);
                             sink.play();
                             playing_id = Some(id.clone());
@@ -117,7 +123,6 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
                             controller.lock().unwrap().on_track_started(id);
                         }
                         None => {
-                            // Unreadable / unsupported: skip to the next track.
                             controller.lock().unwrap().dispatch(PlayerIntent::NextTrack);
                         }
                     }
