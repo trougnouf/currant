@@ -590,10 +590,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             .title_style(Style::default().fg(theme::TITLE)),
     );
     f.render_widget(paragraph, chunks[0]);
+    let gauge_label = format!(
+        "{} / {}",
+        fmt_duration(pos_secs),
+        fmt_duration(duration_secs)
+    );
     f.render_widget(
         Gauge::default()
             .gauge_style(Style::default().fg(theme::GAUGE).bg(theme::ACCENT_DIM))
-            .percent(pct as u16),
+            .percent(pct as u16)
+            .label(gauge_label),
         np_area[1],
     );
 
