@@ -77,7 +77,11 @@ pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgres
         if !root.is_dir() {
             continue;
         }
-        for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|e| !is_hidden(e.path()))
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -128,6 +132,13 @@ pub fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+}
+
+/// True if the file or directory is hidden (starts with a dot).
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with('.'))
 }
 
 fn file_mtime(path: &Path) -> Option<i64> {

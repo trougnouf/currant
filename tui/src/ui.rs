@@ -7,9 +7,33 @@ use crate::app::{App, QueueKind, Tab, ViewPreset, display_title, fmt_duration, r
 use cassis_core::model::Track;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs};
+
+/// Color palette for the TUI.
+mod theme {
+    use ratatui::style::Color;
+    pub const ACCENT: Color = Color::Cyan;
+    pub const ACCENT_DIM: Color = Color::DarkGray;
+    pub const TITLE: Color = Color::Yellow;
+    pub const NOW_PLAYING: Color = Color::Green;
+    pub const PAUSED: Color = Color::Yellow;
+    pub const STOP_AFTER: Color = Color::Red;
+    pub const RATING: Color = Color::Magenta;
+    pub const DURATION: Color = Color::DarkGray;
+    pub const ARTIST: Color = Color::Blue;
+    pub const ALBUM: Color = Color::Cyan;
+    pub const YEAR: Color = Color::DarkGray;
+    pub const GENRE: Color = Color::Green;
+    pub const PATH: Color = Color::DarkGray;
+    pub const QUEUE_NOW: Color = Color::Green;
+    pub const QUEUE_EXPLICIT: Color = Color::Yellow;
+    pub const QUEUE_DYNAMIC: Color = Color::DarkGray;
+    pub const GAUGE: Color = Color::Cyan;
+    pub const HINT: Color = Color::DarkGray;
+    pub const POPUP_BORDER: Color = Color::Cyan;
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -26,10 +50,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_footer(f, app, chunks[2]);
 
     if app.help {
-        draw_help(f, centered(f.area(), 70, 80), app);
+        let area = centered(f.area(), 70, 80);
+        f.render_widget(Clear, area);
+        draw_help(f, area, app);
     }
     if let Some(track) = &app.details {
-        draw_details(f, centered(f.area(), 70, 60), track);
+        let area = centered(f.area(), 70, 60);
+        f.render_widget(Clear, area);
+        draw_details(f, area, track);
     }
 }
 
@@ -72,10 +100,19 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Tab::Files => 5,
     };
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("Cassis"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Cassis")
+                .title_style(Style::default().fg(theme::TITLE).bold()),
+        )
         .select(active)
         .style(Style::default())
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .highlight_style(
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        );
     f.render_widget(tabs, cols[0]);
 
     let prompt = if app.in_search {
@@ -83,8 +120,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "search ('/ to type)"
     };
-    let search = Paragraph::new(format!("{} {}", prompt, app.search))
-        .block(Block::default().borders(Borders::ALL).title("filter"));
+    let search = Paragraph::new(format!("{} {}", prompt, app.search)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("filter")
+            .title_style(Style::default().fg(theme::TITLE)),
+    );
     f.render_widget(search, cols[1]);
 }
 
@@ -113,8 +154,13 @@ fn draw_tracks(
         .map(|t| ListItem::new(track_line(t, app.view, playing_id == Some(&t.id))))
         .collect();
     let list = List::new(rows)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(Style::default().fg(theme::TITLE)),
+        )
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
     state.select(Some(selected));
@@ -123,43 +169,67 @@ fn draw_tracks(
 
 fn track_line(t: &Track, view: ViewPreset, playing: bool) -> Line<'_> {
     let marker = if playing { ">" } else { " " };
+    let marker_style = if playing {
+        Style::default().fg(theme::NOW_PLAYING).bold()
+    } else {
+        Style::default()
+    };
     let rating = render_rating(t.rating);
     let title = display_title(t);
+    let title_style = if playing {
+        Style::default().fg(theme::NOW_PLAYING).bold()
+    } else {
+        Style::default().bold()
+    };
     let dur = fmt_duration(t.duration_secs);
+    let dur_style = Style::default().fg(theme::DURATION);
+    let artist_style = Style::default().fg(theme::ARTIST);
+    let album_style = Style::default().fg(theme::ALBUM);
+    let year_style = Style::default().fg(theme::YEAR);
+    let genre_style = Style::default().fg(theme::GENRE);
     let spans: Vec<Span> = match view {
         ViewPreset::Minimal => vec![
-            Span::raw(format!("{marker} ")),
-            Span::raw(title),
+            Span::styled(format!("{marker} "), marker_style),
+            Span::styled(title, title_style),
             Span::raw(" "),
-            Span::raw(dur),
+            Span::styled(dur, dur_style),
         ],
         ViewPreset::Compact => vec![
-            Span::raw(format!("{marker} {rating} ")),
-            Span::raw(title),
+            Span::styled(
+                format!("{marker} {rating} "),
+                marker_style.fg(theme::RATING),
+            ),
+            Span::styled(title, title_style),
             Span::raw(" - "),
-            Span::raw(t.artist.clone()),
+            Span::styled(t.artist.clone(), artist_style),
             Span::raw(" ["),
-            Span::raw(t.album.clone()),
+            Span::styled(t.album.clone(), album_style),
             Span::raw("] "),
-            Span::raw(dur),
+            Span::styled(dur, dur_style),
         ],
         ViewPreset::Full => vec![
-            Span::raw(format!("{marker} {rating} ")),
-            Span::raw(title),
+            Span::styled(
+                format!("{marker} {rating} "),
+                marker_style.fg(theme::RATING),
+            ),
+            Span::styled(title, title_style),
             Span::raw(" - "),
-            Span::raw(t.artist.clone()),
+            Span::styled(t.artist.clone(), artist_style),
             Span::raw(" ["),
-            Span::raw(t.album.clone()),
+            Span::styled(t.album.clone(), album_style),
             Span::raw("] "),
-            Span::raw(if t.year > 0 {
-                t.year.to_string()
-            } else {
-                String::new()
-            }),
+            Span::styled(
+                if t.year > 0 {
+                    t.year.to_string()
+                } else {
+                    String::new()
+                },
+                year_style,
+            ),
             Span::raw(" "),
-            Span::raw(t.genre.clone()),
+            Span::styled(t.genre.clone(), genre_style),
             Span::raw(" "),
-            Span::raw(dur),
+            Span::styled(dur, dur_style),
         ],
     };
     Line::from(spans)
@@ -188,9 +258,10 @@ fn draw_albums(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("albums - {}", albums.len())),
+                .title(format!("albums - {}", albums.len()))
+                .title_style(Style::default().fg(theme::TITLE)),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
     state.select(Some(selected));
@@ -212,9 +283,10 @@ fn draw_artists(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("artists - {}", artists.len())),
+                .title(format!("artists - {}", artists.len()))
+                .title_style(Style::default().fg(theme::TITLE)),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
     state.select(Some(selected));
@@ -226,21 +298,28 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = rows
         .iter()
         .map(|r| {
-            let mark = match r.kind {
-                QueueKind::NowPlaying => ">",
-                QueueKind::Explicit => "+",
-                QueueKind::Dynamic => "~",
+            let (mark, color) = match r.kind {
+                QueueKind::NowPlaying => (">", theme::QUEUE_NOW),
+                QueueKind::Explicit => ("+", theme::QUEUE_EXPLICIT),
+                QueueKind::Dynamic => ("~", theme::QUEUE_DYNAMIC),
             };
-            ListItem::new(format!("{mark} {} - {}", r.title, r.artist))
+            Line::from(vec![
+                Span::styled(format!("{mark} "), Style::default().fg(color).bold()),
+                Span::raw(r.title.clone()),
+                Span::raw(" - "),
+                Span::styled(r.artist.clone(), Style::default().fg(theme::ARTIST)),
+            ])
+            .into()
         })
         .collect();
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("queue - {} (Enter:jump to  x:remove)", rows.len())),
+                .title(format!("queue - {} (Enter:jump to  x:remove)", rows.len()))
+                .title_style(Style::default().fg(theme::TITLE)),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
     state.select(Some(selected));
@@ -280,8 +359,13 @@ fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
         )
     };
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(Style::default().fg(theme::TITLE)),
+        )
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
         .highlight_symbol(">> ");
     let mut state = ListState::default();
     state.select(Some(selected));
@@ -312,21 +396,38 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         0.0
     };
 
-    let np = if let Some(t) = &app.now_playing {
-        let status = if app.is_playing { "playing" } else { "paused" };
+    let np_line = if let Some(t) = &app.now_playing {
+        let status_color = if app.is_playing {
+            theme::NOW_PLAYING
+        } else {
+            theme::PAUSED
+        };
         let stop = if app.stop_after { " [stop after]" } else { "" };
-        format!(
-            "{status}: {} - {} [{}] {} {}/{}{}",
-            t.title,
-            t.artist,
-            t.album,
-            render_rating(t.rating),
-            fmt_duration(pos_secs),
-            fmt_duration(t.duration_secs),
-            stop
-        )
+        vec![
+            Span::styled(
+                format!("{}: ", if app.is_playing { "playing" } else { "paused" }),
+                Style::default().fg(status_color).bold(),
+            ),
+            Span::styled(t.title.clone(), Style::default().bold()),
+            Span::raw(" - "),
+            Span::styled(t.artist.clone(), Style::default().fg(theme::ARTIST)),
+            Span::raw(" ["),
+            Span::styled(t.album.clone(), Style::default().fg(theme::ALBUM)),
+            Span::raw("] "),
+            Span::styled(render_rating(t.rating), Style::default().fg(theme::RATING)),
+            Span::raw(" "),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    fmt_duration(pos_secs),
+                    fmt_duration(t.duration_secs)
+                ),
+                Style::default().fg(theme::DURATION),
+            ),
+            Span::styled(stop, Style::default().fg(theme::STOP_AFTER).bold()),
+        ]
     } else {
-        "stopped. press Enter on a track to play.".to_string()
+        vec![Span::raw("stopped. press Enter on a track to play.")]
     };
     let radio = app
         .radio_sort
@@ -337,16 +438,24 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         })
         .unwrap_or("-");
     let vol = format!("vol: {:0.0}%", app.volume * 100.0);
-    let line = format!("{np}  | radio: {radio}  | {vol}");
-    let paragraph = Paragraph::new(line).block(
+    let mut line = np_line;
+    line.push(Span::raw("  | "));
+    line.push(Span::styled(
+        format!("radio: {radio}"),
+        Style::default().fg(theme::ACCENT),
+    ));
+    line.push(Span::raw("  | "));
+    line.push(Span::styled(vol, Style::default().fg(theme::ACCENT)));
+    let paragraph = Paragraph::new(Line::from(line)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!("now playing - {} tracks", app.track_count)),
+            .title(format!("now playing - {} tracks", app.track_count))
+            .title_style(Style::default().fg(theme::TITLE)),
     );
     f.render_widget(paragraph, chunks[0]);
     f.render_widget(
         Gauge::default()
-            .gauge_style(Style::default().add_modifier(Modifier::REVERSED))
+            .gauge_style(Style::default().fg(theme::GAUGE).bg(theme::ACCENT_DIM))
             .percent(pct as u16),
         np_area[1],
     );
@@ -356,7 +465,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         app.status.clone()
     };
-    f.render_widget(Paragraph::new(status), chunks[1]);
+    f.render_widget(
+        Paragraph::new(status).style(Style::default().fg(theme::HINT)),
+        chunks[1],
+    );
 }
 
 /// Context-sensitive keybinding hint for the bottom status line.
@@ -380,7 +492,11 @@ fn tab_hint(tab: Tab) -> String {
 }
 
 fn draw_help(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("help");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("help")
+        .title_style(Style::default().fg(theme::TITLE))
+        .border_style(Style::default().fg(theme::POPUP_BORDER));
     let mut text = String::from(
         "\
 /search            filter the current tab (Esc to leave)
@@ -427,38 +543,83 @@ search syntax:
 }
 
 fn draw_details(f: &mut Frame, area: Rect, track: &Track) {
+    let label = Style::default().fg(theme::ACCENT);
+    let val = Style::default();
     let lines = vec![
-        Line::from(vec![Span::raw("title:  "), Span::raw(&track.title)]),
-        Line::from(vec![Span::raw("artist: "), Span::raw(&track.artist)]),
-        Line::from(vec![Span::raw("album:  "), Span::raw(&track.album)]),
         Line::from(vec![
-            Span::raw("album_artist: "),
-            Span::raw(&track.album_artist),
+            Span::styled("title:  ", label),
+            Span::styled(&track.title, val),
         ]),
-        Line::from(vec![Span::raw("genre:  "), Span::raw(&track.genre)]),
-        Line::from(vec![Span::raw("comment: "), Span::raw(&track.comment)]),
-        Line::from(format!(
-            "track_number: {}    year: {}    duration: {}",
-            track.track_number,
-            track.year,
-            fmt_duration(track.duration_secs)
-        )),
-        Line::from(format!(
-            "rating: {}    play_count: {}    last_played: {}",
-            render_rating(track.rating),
-            track.play_count,
-            track
-                .last_played
-                .map(|ts| format!("unix:{ts}"))
-                .unwrap_or("never".into()),
-        )),
+        Line::from(vec![
+            Span::styled("artist: ", label),
+            Span::styled(&track.artist, val),
+        ]),
+        Line::from(vec![
+            Span::styled("album:  ", label),
+            Span::styled(&track.album, val),
+        ]),
+        Line::from(vec![
+            Span::styled("album_artist: ", label),
+            Span::styled(&track.album_artist, val),
+        ]),
+        Line::from(vec![
+            Span::styled("genre:  ", label),
+            Span::styled(&track.genre, val),
+        ]),
+        Line::from(vec![
+            Span::styled("comment: ", label),
+            Span::styled(&track.comment, val),
+        ]),
+        Line::from(vec![
+            Span::styled("track_number: ", label),
+            Span::styled(track.track_number.to_string(), val),
+            Span::styled("    year: ", label),
+            Span::styled(
+                if track.year > 0 {
+                    track.year.to_string()
+                } else {
+                    "?".into()
+                },
+                val,
+            ),
+            Span::styled("    duration: ", label),
+            Span::styled(fmt_duration(track.duration_secs), val),
+        ]),
+        Line::from(vec![
+            Span::styled("rating: ", label),
+            Span::styled(
+                render_rating(track.rating),
+                Style::default().fg(theme::RATING),
+            ),
+            Span::styled("    play_count: ", label),
+            Span::styled(track.play_count.to_string(), val),
+            Span::styled("    last_played: ", label),
+            Span::styled(
+                track
+                    .last_played
+                    .map(|ts| format!("unix:{ts}"))
+                    .unwrap_or("never".into()),
+                val,
+            ),
+        ]),
         Line::from(""),
-        Line::from(vec![Span::raw("path: "), Span::raw(&track.path)]),
-        Line::from(format!("id:   {}", track.id)),
-        Line::from(format!("mtime: {}", track.file_mtime)),
+        Line::from(vec![
+            Span::styled("path: ", label),
+            Span::styled(&track.path, Style::default().fg(theme::PATH)),
+        ]),
+        Line::from(vec![
+            Span::styled("id:   ", label),
+            Span::styled(&track.id, val),
+        ]),
+        Line::from(vec![
+            Span::styled("mtime: ", label),
+            Span::styled(track.file_mtime.to_string(), val),
+        ]),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("track details (any key to close)");
+        .title("track details (any key to close)")
+        .title_style(Style::default().fg(theme::TITLE))
+        .border_style(Style::default().fg(theme::POPUP_BORDER));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
