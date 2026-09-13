@@ -48,6 +48,10 @@ pub struct FilterPage {
 
 pub struct LibraryStore {
     conn: Mutex<Connection>,
+    /// A second read-only connection. With WAL mode this allows the UI to
+    /// query the catalog while the scan thread writes without blocking.
+    /// `None` for in-memory databases (tests).
+    read_conn: Option<Mutex<Connection>>,
 }
 
 impl LibraryStore {
@@ -61,8 +65,15 @@ impl LibraryStore {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+
+        let read_conn = Connection::open(path)?;
+        read_conn.pragma_update(None, "journal_mode", "WAL")?;
+        read_conn.pragma_update(None, "query_only", "ON")?;
+        read_conn.execute_batch(SCHEMA)?;
+
         Ok(Self {
             conn: Mutex::new(conn),
+            read_conn: Some(Mutex::new(read_conn)),
         })
     }
 
@@ -72,17 +83,28 @@ impl LibraryStore {
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            read_conn: None,
         })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    /// Connection for reads. Uses the dedicated read connection when available
+    /// so queries never block on scan writes (WAL mode).
+    fn read_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        match &self.read_conn {
+            Some(rc) => rc.lock().unwrap(),
+            None => self.conn.lock().unwrap(),
+        }
+    }
+
+    /// Connection for writes (upserts, deletes, kv updates).
+    fn write_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
     }
 
     /// Insert or replace a track, preserving user-managed mutable columns
     /// (rating, play_count, last_played) when the file has not changed.
     pub fn upsert_track(&self, track: &Track) -> rusqlite::Result<()> {
-        let conn = self.conn();
+        let conn = self.write_conn();
         // Preserve mutable metadata across rescans when mtime is unchanged.
         let preserved: Option<(u8, u32, Option<i64>)> = conn
             .query_row(
@@ -121,7 +143,7 @@ impl LibraryStore {
     }
 
     pub fn get_track(&self, id: &str) -> Option<Track> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         conn.query_row(
             "SELECT id, path, title, artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime
@@ -133,7 +155,7 @@ impl LibraryStore {
     }
 
     pub fn get_path(&self, id: &str) -> Option<String> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         conn.query_row(
             "SELECT path FROM tracks WHERE id = ?1",
             rusqlite::params![id],
@@ -143,7 +165,7 @@ impl LibraryStore {
     }
 
     pub fn track_count(&self) -> u64 {
-        let conn = self.conn();
+        let conn = self.read_conn();
         conn.query_row("SELECT COUNT(*) FROM tracks", [], |row| {
             row.get::<_, i64>(0)
         })
@@ -152,7 +174,7 @@ impl LibraryStore {
 
     /// All known file paths, used by the scanner to prune removed files.
     pub fn all_paths(&self) -> Vec<String> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         let mut stmt = conn.prepare("SELECT path FROM tracks").unwrap();
         stmt.query_map([], |row| row.get::<_, String>(0))
             .unwrap()
@@ -162,7 +184,7 @@ impl LibraryStore {
 
     /// Map of path -> file_mtime, used by the scanner for incremental rescans.
     pub fn paths_with_mtime(&self) -> std::collections::HashMap<String, i64> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         let mut stmt = match conn.prepare("SELECT path, file_mtime FROM tracks") {
             Ok(s) => s,
             Err(_) => return std::collections::HashMap::new(),
@@ -179,21 +201,36 @@ impl LibraryStore {
         map
     }
 
-    /// Delete tracks whose paths are not in `keep`.
+    /// Delete tracks whose paths are not in `keep`. Batched in a transaction
+    /// so thousands of deletes commit in one pass instead of one fsync each.
     pub fn prune(&self, keep: &std::collections::HashSet<String>) -> usize {
-        let conn = self.conn();
-        let mut deleted = 0;
-        for path in self.all_paths() {
-            if !keep.contains(&path) {
-                let n = conn
-                    .execute(
-                        "DELETE FROM tracks WHERE path = ?1",
-                        rusqlite::params![path],
-                    )
-                    .unwrap_or(0);
-                deleted += n;
-            }
+        let conn = self.write_conn();
+        let mut stmt = match conn.prepare("SELECT path FROM tracks") {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .flatten()
+            .collect();
+        drop(stmt);
+
+        let to_delete: Vec<&String> = paths.iter().filter(|p| !keep.contains(*p)).collect();
+        if to_delete.is_empty() {
+            return 0;
         }
+        conn.execute_batch("BEGIN IMMEDIATE").ok();
+        let mut deleted = 0;
+        for path in to_delete {
+            deleted += conn
+                .execute(
+                    "DELETE FROM tracks WHERE path = ?1",
+                    rusqlite::params![path],
+                )
+                .unwrap_or(0);
+        }
+        conn.execute_batch("COMMIT").ok();
         deleted
     }
 
@@ -208,7 +245,7 @@ impl LibraryStore {
     ) -> FilterPage {
         let frag = expr.to_sql();
         let order = matcher::sort_to_order_by(sort);
-        let conn = self.conn();
+        let conn = self.read_conn();
 
         let where_sql = if frag.where_clause.is_empty() {
             String::new()
@@ -241,7 +278,7 @@ impl LibraryStore {
     /// Random album: pick one album, return its tracks in track order.
     pub fn random_album_tracks(&self, expr: &matcher::SearchExpr) -> Vec<Track> {
         let frag = expr.to_sql();
-        let conn = self.conn();
+        let conn = self.read_conn();
         let where_sql = if frag.where_clause.is_empty() {
             String::new()
         } else {
@@ -290,7 +327,7 @@ impl LibraryStore {
     /// Aggregated album rows, optionally filtered by the same query.
     pub fn albums(&self, expr: &matcher::SearchExpr) -> Vec<Album> {
         let frag = expr.to_sql();
-        let conn = self.conn();
+        let conn = self.read_conn();
         let where_sql = if frag.where_clause.is_empty() {
             String::new()
         } else {
@@ -334,7 +371,7 @@ impl LibraryStore {
     /// Aggregated artist rows, optionally filtered by the same query.
     pub fn artists(&self, expr: &matcher::SearchExpr) -> Vec<Artist> {
         let frag = expr.to_sql();
-        let conn = self.conn();
+        let conn = self.read_conn();
         let where_sql = if frag.where_clause.is_empty() {
             String::new()
         } else {
@@ -374,7 +411,7 @@ impl LibraryStore {
 
     /// Tracks for a single album (artist + album), in track order.
     pub fn album_tracks(&self, artist: &str, album: &str) -> Vec<Track> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
                    FROM tracks WHERE artist = ?1 AND album = ?2
@@ -393,7 +430,7 @@ impl LibraryStore {
 
     /// Tracks for a single artist.
     pub fn artist_tracks(&self, artist: &str) -> Vec<Track> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
                    FROM tracks WHERE artist = ?1
@@ -411,7 +448,7 @@ impl LibraryStore {
     }
 
     pub fn update_rating(&self, id: &str, rating: u8) {
-        let conn = self.conn();
+        let conn = self.write_conn();
         let _ = conn.execute(
             "UPDATE tracks SET rating = ?1 WHERE id = ?2",
             rusqlite::params![rating, id],
@@ -419,7 +456,7 @@ impl LibraryStore {
     }
 
     pub fn increment_play_count(&self, id: &str, last_played: i64) {
-        let conn = self.conn();
+        let conn = self.write_conn();
         let _ = conn.execute(
             "UPDATE tracks SET play_count = play_count + 1, last_played = ?1 WHERE id = ?2",
             rusqlite::params![last_played, id],
@@ -429,7 +466,7 @@ impl LibraryStore {
     // --- key/value store (queue snapshot, settings) ---
 
     fn kv_set(&self, key: &str, value: &str) {
-        let conn = self.conn();
+        let conn = self.write_conn();
         let _ = conn.execute(
             "INSERT OR REPLACE INTO kv (key, value) VALUES (?1, ?2)",
             rusqlite::params![key, value],
@@ -437,7 +474,7 @@ impl LibraryStore {
     }
 
     fn kv_get(&self, key: &str) -> Option<String> {
-        let conn = self.conn();
+        let conn = self.read_conn();
         conn.query_row(
             "SELECT value FROM kv WHERE key = ?1",
             rusqlite::params![key],

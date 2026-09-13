@@ -201,11 +201,12 @@ impl App {
         self.volume = c.volume;
         self.smart_playlists = c.smart_playlists().to_vec();
 
-        // While a scan is running, keep the lists refreshing so new tracks
-        // appear live, and show progress in the status bar.
+        // While a scan is running, show live progress in the status bar.
+        // Lists are NOT refreshed during the scan (the read connection serves
+        // the previous catalog state via WAL, and refreshing every frame
+        // would waste CPU competing with the scan thread).
         if let Some(p) = &self.scan_progress {
             if !p.is_done() {
-                self.dirty = true;
                 let r = p.snapshot();
                 self.status = format!(
                     "scanning... {} files ({} new, {} updated, {} unchanged, {} errors)",
@@ -218,6 +219,8 @@ impl App {
                     r.scanned, r.added, r.updated, r.removed, r.errors
                 );
                 self.scan_progress = None;
+                // One-shot refresh so the lists pick up the new catalog state.
+                self.dirty = true;
             }
         }
 
