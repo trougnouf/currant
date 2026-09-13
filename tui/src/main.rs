@@ -36,9 +36,12 @@ fn main() -> Result<(), io::Error> {
         Arc::new(LibraryStore::open(&catalog_path()).expect("failed to open library catalog"));
     let mut controller = PlayerController::new(store.clone());
 
-    // Restore the previous session's queue, then rescan (incremental).
+    // Restore the previous session's queue and volume, then rescan (incremental).
     if let Some(snap) = store.load_queue_snapshot() {
         controller.restore_queue(snap);
+    }
+    if let Some(v) = store.load_volume() {
+        controller.volume = v;
     }
 
     let roots = store.load_roots();
@@ -75,9 +78,10 @@ fn main() -> Result<(), io::Error> {
 
     let result = run(&mut terminal, &mut app, &controller);
 
-    // Persist the live queue on exit.
+    // Persist the live queue and volume on exit.
     let snap = controller.lock().unwrap().queue_snapshot();
     store.save_queue_snapshot(&snap);
+    store.save_volume(controller.lock().unwrap().volume);
 
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;

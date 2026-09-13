@@ -178,10 +178,16 @@ pub enum PlayerIntent {
     NextTrack,
     PreviousTrack,
     StopAfterCurrent,
+    SetVolume { volume: f32 },
 
     // Metadata
     RateTrack { id: String, rating: u8 },
     IncrementPlayCount { id: String },
+
+    // Smart playlists
+    SavePlaylist { name: String },
+    DeletePlaylist { id: String },
+    ActivatePlaylist { id: String },
 
     // Library
     ScanLibrary { roots: Vec<String> },

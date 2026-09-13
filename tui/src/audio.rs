@@ -66,10 +66,12 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) -> JoinHandle<()> {
         let mut threshold = Duration::from_secs(30);
 
         loop {
-            let (is_playing, current) = {
+            let (is_playing, current, volume) = {
                 let c = controller.lock().unwrap();
-                (c.is_playing, c.current_track.clone())
+                (c.is_playing, c.current_track.clone(), c.volume)
             };
+
+            sink.set_volume(volume);
 
             if !is_playing {
                 sink.pause();

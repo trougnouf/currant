@@ -7,7 +7,7 @@
 //! `controller`) and is snapshotted here on exit.
 
 use crate::matcher::{self, SqlParam};
-use crate::model::{Album, Artist, QueueSnapshot, SortPreset, Track};
+use crate::model::{Album, Artist, QueueSnapshot, SmartPlaylist, SortPreset, Track};
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use std::path::Path;
 use std::sync::Mutex;
@@ -467,6 +467,26 @@ impl LibraryStore {
 
     pub fn load_roots(&self) -> Vec<String> {
         self.kv_get("roots")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_volume(&self, volume: f32) {
+        self.kv_set("volume", &volume.to_string());
+    }
+
+    pub fn load_volume(&self) -> Option<f32> {
+        self.kv_get("volume").and_then(|v| v.parse().ok())
+    }
+
+    pub fn save_smart_playlists(&self, playlists: &[SmartPlaylist]) {
+        if let Ok(json) = serde_json::to_string(playlists) {
+            self.kv_set("smart_playlists", &json);
+        }
+    }
+
+    pub fn load_smart_playlists(&self) -> Vec<SmartPlaylist> {
+        self.kv_get("smart_playlists")
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default()
     }

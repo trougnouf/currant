@@ -190,6 +190,91 @@ pub fn is_empty(expr: &SearchExpr) -> bool {
     matches!(expr, SearchExpr::Str(Field::All, CmpOp::Contains, s) if s.is_empty())
 }
 
+/// Serialize a `SearchExpr` back into a query string. Returns `None` for the
+/// trivial match-all expression (so an empty string is stored).
+pub fn expr_to_query(expr: &SearchExpr) -> Option<String> {
+    let s = render_expr(expr);
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn render_expr(expr: &SearchExpr) -> String {
+    match expr {
+        SearchExpr::Str(field, op, val) => match field {
+            Field::All => {
+                if val.is_empty() {
+                    String::new()
+                } else {
+                    val.clone()
+                }
+            }
+            Field::Genre => format!("#{}", render_text_op(*op, val)),
+            Field::Rating => {
+                let n: i64 = val.parse().unwrap_or(0);
+                format!("*{}{}", render_op(*op), n)
+            }
+            Field::Duration => {
+                let n: i64 = val.parse().unwrap_or(0);
+                format!("~{}{}s", render_op(*op), n)
+            }
+            f => format!("{}:{}", field_alias(*f), render_text_op(*op, val)),
+        },
+        SearchExpr::Num(field, op, val) => match field {
+            Field::Rating => format!("*{}{}", render_op(*op), val),
+            Field::Duration => format!("~{}{}s", render_op(*op), val),
+            f => format!("{}:{}{}", field_alias(*f), render_op(*op), val),
+        },
+        SearchExpr::And(a, b) => {
+            let l = render_expr(a);
+            let r = render_expr(b);
+            if l.is_empty() {
+                r
+            } else if r.is_empty() {
+                l
+            } else {
+                format!("{l} {r}")
+            }
+        }
+        SearchExpr::Or(a, b) => format!("{} | {}", render_expr(a), render_expr(b)),
+        SearchExpr::Not(a) => format!("-{}", render_expr(a)),
+    }
+}
+
+fn render_op(op: CmpOp) -> &'static str {
+    match op {
+        CmpOp::Contains => "",
+        CmpOp::NotContains => "!=",
+        CmpOp::Eq => "=",
+        CmpOp::NotEq => "!=",
+        CmpOp::Gt => ">",
+        CmpOp::Ge => ">=",
+        CmpOp::Lt => "<",
+        CmpOp::Le => "<=",
+    }
+}
+
+fn render_text_op(op: CmpOp, val: &str) -> String {
+    match op {
+        CmpOp::Contains => val.to_string(),
+        CmpOp::NotContains => format!("!{val}"),
+        _ => format!("{}{}", render_op(op), val),
+    }
+}
+
+fn field_alias(field: Field) -> &'static str {
+    match field {
+        Field::Title => "t",
+        Field::Artist => "ar",
+        Field::Album => "al",
+        Field::Genre => "g",
+        Field::Comment => "c",
+        Field::Year => "year",
+        Field::Duration => "d",
+        Field::Rating => "*",
+        Field::PlayCount => "p",
+        Field::All => "",
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
     Text(String),

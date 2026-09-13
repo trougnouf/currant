@@ -5,7 +5,7 @@
 
 use framboise_core::controller::PlayerController;
 use framboise_core::matcher::{self, parse_query};
-use framboise_core::model::{Album, Artist, PlayerIntent, SortPreset, Track};
+use framboise_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
 use framboise_core::scanner::ScanProgress;
 use framboise_core::store::LibraryStore;
 use std::sync::{Arc, MutexGuard};
@@ -143,6 +143,11 @@ pub struct App {
     pub stop_after: bool,
     pub track_count: u64,
     pub radio_sort: Option<SortPreset>,
+    pub volume: f32,
+    pub smart_playlists: Vec<SmartPlaylist>,
+
+    /// True when `g` was pressed and we expect a digit to activate a playlist.
+    pending_g: bool,
 
     /// Live scan progress; `None` when no scan is running.
     scan_progress: Option<Arc<ScanProgress>>,
@@ -173,6 +178,9 @@ impl App {
             stop_after: false,
             track_count: 0,
             radio_sort: None,
+            volume: 0.7,
+            smart_playlists: Vec::new(),
+            pending_g: false,
             scan_progress: None,
             dirty: true,
         }
@@ -190,6 +198,8 @@ impl App {
         self.stop_after = c.stop_after_current;
         self.track_count = c.store.track_count();
         self.radio_sort = Some(c.dynamic_sort());
+        self.volume = c.volume;
+        self.smart_playlists = c.smart_playlists().to_vec();
 
         // While a scan is running, keep the lists refreshing so new tracks
         // appear live, and show progress in the status bar.
@@ -368,6 +378,25 @@ impl App {
             return false;
         }
 
+        // g-prefix: activate a saved playlist by index.
+        if self.pending_g {
+            self.pending_g = false;
+            if let KeyCode::Char(ch) = key.code
+                && let Some(n) = ch.to_digit(10)
+            {
+                let idx = n as usize;
+                if idx == 0 {
+                    self.status = "no playlist 0".into();
+                } else if let Some(pl) = self.smart_playlists.get(idx - 1).cloned() {
+                    c.dispatch(PlayerIntent::ActivatePlaylist { id: pl.id });
+                    self.status = format!("activated: {pl_name}", pl_name = pl.name);
+                } else {
+                    self.status = format!("no playlist {n}");
+                }
+            }
+            return false;
+        }
+
         match key.code {
             KeyCode::Esc => return true,
             KeyCode::Tab => self.tab = self.tab.next(),
@@ -406,6 +435,19 @@ impl App {
             KeyCode::Char('R') => self.set_radio(c, SortPreset::RandomAlbum),
             KeyCode::Char('m') => self.set_radio(c, self.sort),
             KeyCode::Char('?') => self.help = !self.help,
+            KeyCode::Char('P') => {
+                let name = if self.search.is_empty() {
+                    format!("playlist {}", self.smart_playlists.len() + 1)
+                } else {
+                    self.search.clone()
+                };
+                c.dispatch(PlayerIntent::SavePlaylist { name: name.clone() });
+                self.status = format!("saved playlist: {name}");
+            }
+            KeyCode::Char('g') => {
+                self.pending_g = true;
+                self.status = "g+1-9: activate playlist".into();
+            }
             KeyCode::Char('/') => {
                 self.in_search = true;
                 self.status = "search: ".into();
@@ -416,6 +458,16 @@ impl App {
             KeyCode::Char('3') => self.rate_selected(c, 3),
             KeyCode::Char('4') => self.rate_selected(c, 4),
             KeyCode::Char('5') => self.rate_selected(c, 5),
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                let v = (c.volume + 0.05).min(1.0);
+                c.dispatch(PlayerIntent::SetVolume { volume: v });
+                self.status = format!("vol: {:0.0}%", v * 100.0);
+            }
+            KeyCode::Char('-') => {
+                let v = (c.volume - 0.05).max(0.0);
+                c.dispatch(PlayerIntent::SetVolume { volume: v });
+                self.status = format!("vol: {:0.0}%", v * 100.0);
+            }
             _ => {}
         }
         false

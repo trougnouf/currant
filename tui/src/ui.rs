@@ -26,7 +26,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_footer(f, app, chunks[2]);
 
     if app.help {
-        draw_help(f, f.size());
+        draw_help(f, f.size(), app);
     }
 }
 
@@ -250,7 +250,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             _ => "ordered",
         })
         .unwrap_or("-");
-    let line = format!("{np}  | radio: {radio}");
+    let vol = format!("vol: {:0.0}%", app.volume * 100.0);
+    let line = format!("{np}  | radio: {radio}  | {vol}");
     let paragraph = Paragraph::new(line).block(
         Block::default()
             .borders(Borders::ALL)
@@ -258,7 +259,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     );
     f.render_widget(paragraph, chunks[0]);
 
-    let hint = "Tab:tabs  /:search  Enter:play  q:queue  n:next  x:remove  s:stop-after  1-5:rate  c:view  r:sort  m/R:radio  p:> <  Ctrl+C:quit";
+    let hint = "Tab:tabs  /:search  Enter:play  q:queue  n:next  x:remove  s:stop-after  1-5:rate  c:view  r:sort  m/R:radio  +/-:vol  p:> <  Ctrl+C:quit";
     let status = if app.status.is_empty() {
         hint.to_string()
     } else {
@@ -267,12 +268,13 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(status), chunks[1]);
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
+fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title("help");
-    let text = "\
+    let mut text = String::from(
+        "\
 /search            filter the current tab (Esc to leave)
 Tab / Shift+Tab    switch tabs
-j k / Up Down     move selection    PgUp/PgDn jump
+j k / arrows       move selection    PgUp/PgDn jump
 Enter             play (track/file/album/artist/queue row)
 q                 enqueue (append)        n play next
 x                 remove from queue (queue tab)
@@ -281,7 +283,32 @@ s                 stop after current
 c                 cycle columns (view preset)
 r                 cycle sort            m set radio  R random-album radio
 p > <             play/pause, next, previous
-Ctrl+C / Esc      quit";
++/-               volume up/down
+P                 save current search as a smart playlist
+g1-9              activate saved playlist by index
+Ctrl+C / Esc      quit
+
+search syntax:
+  free text           matches title, artist, album
+  ar:pink            artist contains 'pink'
+  al:=kind of blue   album equals exactly
+  t:-love            title does not contain 'love'
+  #jazz              genre contains 'jazz'
+  year:>=1990        year >= 1990
+  *>=4               rating >= 4 stars
+  ~>5m               duration > 5 minutes
+  p:0                play count = 0 (never played)
+  -term              exclude (NOT)
+  a | b              either (OR)
+  (a b)              grouping (implicit AND)
+",
+    );
+    if !app.smart_playlists.is_empty() {
+        text.push_str("\nsaved playlists (g+N to activate):\n");
+        for (i, pl) in app.smart_playlists.iter().take(9).enumerate() {
+            text.push_str(&format!("  g{}  {}  [{}]\n", i + 1, pl.name, pl.query));
+        }
+    }
     let para = Paragraph::new(text).block(block);
     f.render_widget(para, area);
 }

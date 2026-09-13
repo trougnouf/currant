@@ -4,8 +4,8 @@
 //! `PlayerIntent`s against it, backed by the SQLite catalog for the dynamic
 //! queue and metadata persistence.
 
-use crate::matcher::SearchExpr;
-use crate::model::{PlayerIntent, QueueSnapshot, SortPreset, Track};
+use crate::matcher::{self, SearchExpr};
+use crate::model::{PlayerIntent, QueueSnapshot, SmartPlaylist, SortPreset, Track};
 use crate::scanner::scan_roots;
 use crate::scrobble::{NoopScrobbler, ScrobbleEvent, Scrobbler};
 use crate::store::LibraryStore;
@@ -26,16 +26,20 @@ pub struct PlayerController {
     pub current_track: Option<String>,
     pub stop_after_current: bool,
     pub is_playing: bool,
+    pub volume: f32,
 
     /// The query + sort driving the dynamic queue (the active smart playlist).
     dynamic_query: SearchExpr,
     dynamic_sort: SortPreset,
 
     scrobbler: Arc<dyn Scrobbler>,
+
+    smart_playlists: Vec<SmartPlaylist>,
 }
 
 impl PlayerController {
     pub fn new(store: Arc<LibraryStore>) -> Self {
+        let smart_playlists = store.load_smart_playlists();
         Self {
             store,
             explicit_queue: Vec::new(),
@@ -44,6 +48,7 @@ impl PlayerController {
             current_track: None,
             stop_after_current: false,
             is_playing: false,
+            volume: 0.7,
             dynamic_query: SearchExpr::Str(
                 crate::model::Field::All,
                 crate::model::CmpOp::Contains,
@@ -51,11 +56,16 @@ impl PlayerController {
             ),
             dynamic_sort: SortPreset::Random,
             scrobbler: Arc::new(NoopScrobbler),
+            smart_playlists,
         }
     }
 
     pub fn set_scrobbler(&mut self, scrobbler: Arc<dyn Scrobbler>) {
         self.scrobbler = scrobbler;
+    }
+
+    pub fn smart_playlists(&self) -> &[SmartPlaylist] {
+        &self.smart_playlists
     }
 
     /// Configure the dynamic queue source (the active smart playlist/search).
@@ -208,6 +218,9 @@ impl PlayerController {
             PlayerIntent::StopAfterCurrent => {
                 self.stop_after_current = !self.stop_after_current;
             }
+            PlayerIntent::SetVolume { volume } => {
+                self.volume = volume.clamp(0.0, 1.0);
+            }
             PlayerIntent::RateTrack { id, rating } => {
                 let rating = rating.min(5);
                 self.store.update_rating(&id, rating);
@@ -221,6 +234,27 @@ impl PlayerController {
             }
             PlayerIntent::IncrementPlayCount { id } => {
                 self.on_track_started(&id);
+            }
+            PlayerIntent::SavePlaylist { name } => {
+                let query = matcher::expr_to_query(&self.dynamic_query).unwrap_or_default();
+                let pl = SmartPlaylist {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name,
+                    query,
+                    sort_preset: self.dynamic_sort,
+                };
+                self.smart_playlists.push(pl);
+                self.store.save_smart_playlists(&self.smart_playlists);
+            }
+            PlayerIntent::DeletePlaylist { id } => {
+                self.smart_playlists.retain(|p| p.id != id);
+                self.store.save_smart_playlists(&self.smart_playlists);
+            }
+            PlayerIntent::ActivatePlaylist { id } => {
+                if let Some(pl) = self.smart_playlists.iter().find(|p| p.id == id).cloned() {
+                    let expr = matcher::parse_query(&pl.query);
+                    self.set_dynamic_source(expr, pl.sort_preset);
+                }
             }
             PlayerIntent::ScanLibrary { roots } => {
                 self.store.save_roots(&roots);
