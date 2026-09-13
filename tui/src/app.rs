@@ -18,15 +18,17 @@ pub enum Tab {
     Albums,
     Artists,
     Queue,
+    Playlists,
     Files,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [
+    const ALL: [Tab; 6] = [
         Tab::Tracks,
         Tab::Albums,
         Tab::Artists,
         Tab::Queue,
+        Tab::Playlists,
         Tab::Files,
     ];
 
@@ -139,6 +141,7 @@ pub struct App {
     sel_albums: usize,
     sel_artists: usize,
     sel_queue: usize,
+    sel_playlists: usize,
     queue_rows: Vec<QueueRow>,
 
     // view model rebuilt each refresh
@@ -179,6 +182,7 @@ impl App {
             sel_albums: 0,
             sel_artists: 0,
             sel_queue: 0,
+            sel_playlists: 0,
             queue_rows: Vec::new(),
             now_playing: None,
             is_playing: false,
@@ -246,6 +250,7 @@ impl App {
             Tab::Albums => self.refresh_albums(&c.store, &expr),
             Tab::Artists => self.refresh_artists(&c.store, &expr),
             Tab::Queue => self.refresh_queue(c),
+            Tab::Playlists => self.refresh_playlists(),
         }
         self.dirty = false;
     }
@@ -320,6 +325,12 @@ impl App {
         self.queue_rows = rows;
     }
 
+    fn refresh_playlists(&mut self) {
+        self.sel_playlists = self
+            .sel_playlists
+            .min(self.smart_playlists.len().saturating_sub(1));
+    }
+
     // --- accessors used by the ui ---
 
     pub fn tracks_view(&self) -> (&[Track], usize, u64, usize) {
@@ -350,6 +361,10 @@ impl App {
 
     pub fn queue_view(&self) -> (&[QueueRow], usize) {
         (&self.queue_rows, self.sel_queue)
+    }
+
+    pub fn playlists_view(&self) -> (&[SmartPlaylist], usize) {
+        (&self.smart_playlists, self.sel_playlists)
     }
 
     // --- input ---
@@ -513,6 +528,7 @@ impl App {
             Tab::Albums => self.sel_albums = 0,
             Tab::Artists => self.sel_artists = 0,
             Tab::Queue => self.sel_queue = 0,
+            Tab::Playlists => self.sel_playlists = 0,
         }
     }
 
@@ -523,6 +539,7 @@ impl App {
             Tab::Albums => self.albums.len(),
             Tab::Artists => self.artists.len(),
             Tab::Queue => self.queue_rows.len(),
+            Tab::Playlists => self.smart_playlists.len(),
         }
     }
 
@@ -533,6 +550,7 @@ impl App {
             Tab::Albums => self.sel_albums,
             Tab::Artists => self.sel_artists,
             Tab::Queue => self.sel_queue,
+            Tab::Playlists => self.sel_playlists,
         }
     }
 
@@ -545,6 +563,7 @@ impl App {
             Tab::Albums => self.sel_albums = i,
             Tab::Artists => self.sel_artists = i,
             Tab::Queue => self.sel_queue = i,
+            Tab::Playlists => self.sel_playlists = i,
         }
         // ensure() will reload the window if the selection moved outside it.
         // No need to set dirty — that would invalidate and reset selection to 0.
@@ -577,7 +596,7 @@ impl App {
                 .get(self.files.list_index())
                 .map(|t| t.id.clone()),
             Tab::Queue => self.queue_rows.get(self.sel_queue).map(|r| r.id.clone()),
-            Tab::Albums | Tab::Artists => None,
+            Tab::Albums | Tab::Artists | Tab::Playlists => None,
         }
         .or_else(|| {
             // Albums/artists: resolve the first track of the selection.
@@ -618,6 +637,12 @@ impl App {
                     self.status = format!("playing artist: {}", a.name);
                 }
             }
+            Tab::Playlists => {
+                if let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned() {
+                    c.dispatch(PlayerIntent::ActivatePlaylist { id: pl.id.clone() });
+                    self.status = format!("activated: {}", pl.name);
+                }
+            }
         }
     }
 
@@ -643,17 +668,23 @@ impl App {
                     self.status = if next { "artist next" } else { "artist queued" }.into();
                 }
             }
-            Tab::Queue => {}
+            Tab::Queue | Tab::Playlists => {}
         }
     }
 
     fn remove_from_queue(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
-        if self.tab != Tab::Queue {
+        if self.tab == Tab::Queue {
+            if let Some(row) = self.queue_rows.get(self.sel_queue).cloned() {
+                c.dispatch(PlayerIntent::RemoveFromQueue { id: row.id });
+                self.status = "removed from queue".into();
+            }
             return;
         }
-        if let Some(row) = self.queue_rows.get(self.sel_queue).cloned() {
-            c.dispatch(PlayerIntent::RemoveFromQueue { id: row.id });
-            self.status = "removed from queue".into();
+        if self.tab == Tab::Playlists
+            && let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned()
+        {
+            c.dispatch(PlayerIntent::DeletePlaylist { id: pl.id });
+            self.status = format!("deleted playlist: {}", pl.name);
         }
     }
 

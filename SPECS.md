@@ -155,7 +155,7 @@ Metadata is read and written by lofty 0.25.
 
 ### 6.1. Tabs
 
-`tracks` / `albums` / `artists` / `queue` / `files` — cycled with `Tab` / `Shift+Tab`.
+`tracks` / `albums` / `artists` / `queue` / `playlists` / `files` — cycled with `Tab` / `Shift+Tab`.
 
 ### 6.2. Key bindings
 
@@ -165,10 +165,10 @@ Metadata is read and written by lofty 0.25.
 | `Tab` / `Shift+Tab` | switch tabs |
 | `j` `k` / arrows | move selection (PgUp/PgDn jump 20) |
 | `Home` / `End` | first / last |
-| `Enter` | play selection (track, album, artist, queue row) |
+| `Enter` | play selection (track, album, artist, queue row) / activate playlist (playlists tab) |
 | `q` | enqueue (append to queue) |
 | `n` | play next (front of queue) |
-| `x` | remove from queue (queue tab) |
+| `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `s` | stop after current |
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full) |
@@ -202,6 +202,5 @@ Not yet implemented, listed for priority tracking:
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Settings UI for scan roots, scrobble token, volume default
-*   Playlist tab (dedicated tab for saved smart playlists)
 *   Gapless playback
 *   ReplayGain

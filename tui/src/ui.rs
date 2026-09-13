@@ -36,7 +36,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(44), Constraint::Min(0)])
         .split(area);
 
-    let titles = ["tracks", "albums", "artists", "queue", "files"]
+    let titles = ["tracks", "albums", "artists", "queue", "playlists", "files"]
         .iter()
         .map(|t| Line::from(*t))
         .collect::<Vec<_>>();
@@ -45,7 +45,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Tab::Albums => 1,
         Tab::Artists => 2,
         Tab::Queue => 3,
-        Tab::Files => 4,
+        Tab::Playlists => 4,
+        Tab::Files => 5,
     };
     let tabs = Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title("Cassis"))
@@ -71,6 +72,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         Tab::Albums => draw_albums(f, app, area),
         Tab::Artists => draw_artists(f, app, area),
         Tab::Queue => draw_queue(f, app, area),
+        Tab::Playlists => draw_playlists(f, app, area),
     }
 }
 
@@ -221,6 +223,47 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
+    let (playlists, selected) = app.playlists_view();
+    let sort_name = |s: cassis_core::model::SortPreset| match s {
+        cassis_core::model::SortPreset::ArtistAlbumTrack => "artist/album",
+        cassis_core::model::SortPreset::YearDesc => "year",
+        cassis_core::model::SortPreset::MostPlayed => "most played",
+        cassis_core::model::SortPreset::HighestRated => "highest rated",
+        cassis_core::model::SortPreset::Random => "random",
+        cassis_core::model::SortPreset::RandomAlbum => "random album",
+        cassis_core::model::SortPreset::Path => "path",
+    };
+    let items: Vec<ListItem> = playlists
+        .iter()
+        .enumerate()
+        .map(|(i, pl)| {
+            ListItem::new(format!(
+                "g{}  {}  [{}]  sort: {}",
+                i + 1,
+                pl.name,
+                pl.query,
+                sort_name(pl.sort_preset)
+            ))
+        })
+        .collect();
+    let title = if playlists.is_empty() {
+        "playlists - empty (P to save current search)".to_string()
+    } else {
+        format!(
+            "playlists - {} (Enter: activate  x: delete)",
+            playlists.len()
+        )
+    };
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol(">> ");
+    let mut state = ListState::default();
+    state.select(Some(selected));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -300,9 +343,9 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
 /search            filter the current tab (Esc to leave)
 Tab / Shift+Tab    switch tabs
 j k / arrows       move selection    PgUp/PgDn jump
-Enter             play (track/file/album/artist/queue row)
+Enter             play / activate playlist (playlists tab)
 q                 enqueue (append)        n play next
-x                 remove from queue (queue tab)
+x                 remove from queue (queue tab) / delete playlist (playlists tab)
 s                 stop after current
 1-5 / 0           rate (0 clears)
 c                 cycle columns (view preset)
@@ -311,7 +354,7 @@ p > <             play/pause, next, previous
 +/-               volume up/down
 </> (h/l)         seek backward/forward 5s    H/L seek 30s
 P                 save current search as a smart playlist
-g1-9              activate saved playlist by index
+g1-9              activate saved playlist by index (or use playlists tab)
 Ctrl+C / Esc      quit
 
 search syntax:
@@ -330,7 +373,7 @@ search syntax:
 ",
     );
     if !app.smart_playlists.is_empty() {
-        text.push_str("\nsaved playlists (g+N to activate):\n");
+        text.push_str("\nsaved playlists (g+N or playlists tab):\n");
         for (i, pl) in app.smart_playlists.iter().take(9).enumerate() {
             text.push_str(&format!("  g{}  {}  [{}]\n", i + 1, pl.name, pl.query));
         }
