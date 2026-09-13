@@ -420,15 +420,6 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
     let (playlists, selected) = app.playlists_view();
-    let sort_name = |s: cassis_core::model::SortPreset| match s {
-        cassis_core::model::SortPreset::ArtistAlbumTrack => "artist/album",
-        cassis_core::model::SortPreset::YearDesc => "year",
-        cassis_core::model::SortPreset::MostPlayed => "most played",
-        cassis_core::model::SortPreset::HighestRated => "highest rated",
-        cassis_core::model::SortPreset::Random => "random",
-        cassis_core::model::SortPreset::RandomAlbum => "random album",
-        cassis_core::model::SortPreset::Path => "path",
-    };
     let items: Vec<ListItem> = playlists
         .iter()
         .enumerate()
@@ -438,7 +429,7 @@ fn draw_playlists(f: &mut Frame, app: &App, area: Rect) {
                 i + 1,
                 pl.name,
                 pl.query,
-                sort_name(pl.sort_preset)
+                crate::app::sort_label(pl.sort_preset)
             ))
         })
         .collect();
@@ -565,16 +556,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs  /:search  p:play  >:next <:prev  +/-:vol  h/l:seek  v:expand  ?:help  Ctrl+J:jump to playing  Ctrl+C:quit";
+    let universal = "  Tab:tabs  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  ?:help  Ctrl+J:jump to playing  Ctrl+C:quit";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
-            "Enter:play  q:queue  n:next  x:remove  0-5:rate  d:details  c:view  r:sort  m/R:radio  s:stop-after"
+            "Enter:play  q:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
         }
         Tab::Albums => {
-            "Enter:play album  v:expand  q:queue album  n:next  d:details  c:view  r:sort  m/R:radio"
+            "Enter:play album  v:expand  q:queue album  N:play-next  d:details  c:view  s:sort  r:radio"
         }
         Tab::Artists => {
-            "Enter:play artist  v:expand  q:queue artist  n:next  d:details  c:view  r:sort  m/R:radio"
+            "Enter:play artist  v:expand  q:queue artist  N:play-next  d:details  c:view  s:sort  r:radio"
         }
         Tab::Queue => "Enter:jump to  x:remove  s:stop-after  d:details  c:view",
         Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
@@ -595,13 +586,13 @@ Tab / Shift+Tab    switch tabs
 j k / arrows       move selection    PgUp/PgDn jump
 Enter             play / activate playlist (playlists tab)
 v                 expand album/artist to browse tracks (v again to collapse)
-q                 enqueue (append)        n play next
+q                 enqueue (append)        N play next
 x                 remove from queue (queue tab) / delete playlist (playlists tab)
-s                 stop after current
+S                 stop after current
 1-5 / 0           rate (0 clears)
 c                 cycle columns (view preset)
-r                 cycle sort            m set radio  R random-album radio
-p > <             play/pause, next, previous
+s                 cycle sort            r/R toggle radio (random / random-album)
+p n <             play/pause, next, previous
 +/-               volume up/down
 </> (h/l)         seek backward/forward 5s    H/L seek 30s
 P                 save current search as a smart playlist

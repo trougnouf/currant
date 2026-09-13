@@ -54,7 +54,7 @@ impl PlayerController {
                 crate::model::CmpOp::Contains,
                 String::new(),
             ),
-            dynamic_sort: SortPreset::Random,
+            dynamic_sort: SortPreset::RandomAlbum,
             scrobbler: Arc::new(NoopScrobbler),
             smart_playlists,
         }

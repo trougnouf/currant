@@ -513,16 +513,9 @@ impl App {
             KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
             KeyCode::Char('>') | KeyCode::Char('.') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('<') | KeyCode::Char(',') => c.dispatch(PlayerIntent::PreviousTrack),
-            KeyCode::Char('s') => {
-                c.dispatch(PlayerIntent::StopAfterCurrent);
-                self.status = if c.stop_after_current {
-                    "stop after current: on".into()
-                } else {
-                    "stop after current: off".into()
-                };
-            }
             KeyCode::Char('q') => self.enqueue_selected(c, false),
-            KeyCode::Char('n') => self.enqueue_selected(c, true),
+            KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
+            KeyCode::Char('N') => self.enqueue_selected(c, true),
             KeyCode::Char('x') => self.remove_from_queue(c),
             KeyCode::Char('c') => {
                 self.view = match self.view {
@@ -531,9 +524,20 @@ impl App {
                     ViewPreset::Full => ViewPreset::Minimal,
                 };
             }
-            KeyCode::Char('r') => self.cycle_sort(),
-            KeyCode::Char('R') => self.set_radio(c, SortPreset::RandomAlbum),
-            KeyCode::Char('m') => self.set_radio(c, self.sort),
+            KeyCode::Char('s') => {
+                self.cycle_sort();
+                self.status = format!("sort: {}", sort_label(self.sort));
+            }
+            KeyCode::Char('S') => {
+                c.dispatch(PlayerIntent::StopAfterCurrent);
+                self.status = if c.stop_after_current {
+                    "stop after current: on".into()
+                } else {
+                    "stop after current: off".into()
+                };
+            }
+            KeyCode::Char('r') => self.toggle_radio(c),
+            KeyCode::Char('R') => self.toggle_radio(c),
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Char('d') => self.show_details(c),
             KeyCode::Char('v') => self.toggle_expand(c),
@@ -836,14 +840,14 @@ impl App {
         self.reset_selection();
     }
 
-    fn set_radio(&mut self, c: &mut MutexGuard<'_, PlayerController>, sort: SortPreset) {
-        let expr = parse_query(&self.search);
-        c.set_dynamic_source(expr, sort);
-        self.status = match sort {
-            SortPreset::RandomAlbum => "radio: random album".into(),
-            SortPreset::Random => "radio: random".into(),
-            _ => "radio: set".into(),
+    fn toggle_radio(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
+        let next = match c.dynamic_sort() {
+            SortPreset::RandomAlbum => SortPreset::Random,
+            _ => SortPreset::RandomAlbum,
         };
+        let expr = parse_query(&self.search);
+        c.set_dynamic_source(expr, next);
+        self.status = format!("radio: {}", sort_label(next));
     }
 
     fn show_details(&mut self, c: &MutexGuard<'_, PlayerController>) {
@@ -1043,5 +1047,17 @@ pub fn fmt_duration(secs: u32) -> String {
         format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
     } else {
         format!("{:02}:{:02}", secs / 60, secs % 60)
+    }
+}
+
+pub fn sort_label(sort: SortPreset) -> &'static str {
+    match sort {
+        SortPreset::ArtistAlbumTrack => "artist/album",
+        SortPreset::YearDesc => "year",
+        SortPreset::MostPlayed => "most played",
+        SortPreset::HighestRated => "highest rated",
+        SortPreset::Random => "random",
+        SortPreset::RandomAlbum => "random album",
+        SortPreset::Path => "path",
     }
 }
