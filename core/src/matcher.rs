@@ -33,15 +33,6 @@ pub struct SqlFragment {
     pub params: Vec<SqlParam>,
 }
 
-impl SqlFragment {
-    fn push(&mut self, sql: &str) {
-        if !self.where_clause.is_empty() {
-            self.where_clause.push_str(" AND ");
-        }
-        self.where_clause.push_str(sql);
-    }
-}
-
 /// A compiled query: WHERE fragment and the ORDER BY clause.
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
@@ -74,15 +65,14 @@ impl SearchExpr {
         match self {
             SearchExpr::Str(field, op, val) => match field {
                 Field::All => {
-                    let like = "(title LIKE ? OR artist LIKE ? OR album LIKE ?)".to_string();
-                    frag.push(&like);
+                    frag.where_clause
+                        .push_str("(title LIKE ? OR artist LIKE ? OR album LIKE ?)");
                     let p = format!("%{val}%");
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p));
                 }
                 Field::Year | Field::Duration | Field::Rating | Field::PlayCount => {
-                    // A text op applied to a numeric column: coerce if possible.
                     if let Ok(n) = val.parse::<i64>() {
                         write_numeric(frag, field.column(), *op, n);
                     }
@@ -93,21 +83,21 @@ impl SearchExpr {
                 write_numeric(frag, field.column(), *op, *val);
             }
             SearchExpr::And(a, b) => {
-                frag.push("(");
+                frag.where_clause.push('(');
                 a.write_sql(frag);
                 frag.where_clause.push_str(" AND ");
                 b.write_sql(frag);
                 frag.where_clause.push(')');
             }
             SearchExpr::Or(a, b) => {
-                frag.push("(");
+                frag.where_clause.push('(');
                 a.write_sql(frag);
                 frag.where_clause.push_str(" OR ");
                 b.write_sql(frag);
                 frag.where_clause.push(')');
             }
             SearchExpr::Not(a) => {
-                frag.push("NOT (");
+                frag.where_clause.push_str("NOT (");
                 a.write_sql(frag);
                 frag.where_clause.push(')');
             }
@@ -118,23 +108,24 @@ impl SearchExpr {
 fn write_text(frag: &mut SqlFragment, col: &str, op: CmpOp, val: &str) {
     match op {
         CmpOp::Contains => {
-            frag.push(&format!("{col} LIKE ?"));
+            frag.where_clause.push_str(&format!("{col} LIKE ?"));
             frag.params.push(SqlParam::Text(format!("%{val}%")));
         }
         CmpOp::NotContains => {
-            frag.push(&format!("{col} NOT LIKE ?"));
+            frag.where_clause.push_str(&format!("{col} NOT LIKE ?"));
             frag.params.push(SqlParam::Text(format!("%{val}%")));
         }
         CmpOp::Eq => {
-            frag.push(&format!("lower({col}) = lower(?)"));
+            frag.where_clause
+                .push_str(&format!("lower({col}) = lower(?)"));
             frag.params.push(SqlParam::Text(val.to_string()));
         }
         CmpOp::NotEq => {
-            frag.push(&format!("lower({col}) != lower(?)"));
+            frag.where_clause
+                .push_str(&format!("lower({col}) != lower(?)"));
             frag.params.push(SqlParam::Text(val.to_string()));
         }
         CmpOp::Gt | CmpOp::Ge | CmpOp::Lt | CmpOp::Le => {
-            // Lexicographic comparison on a text column.
             let sym = match op {
                 CmpOp::Gt => ">",
                 CmpOp::Ge => ">=",
@@ -142,7 +133,7 @@ fn write_text(frag: &mut SqlFragment, col: &str, op: CmpOp, val: &str) {
                 CmpOp::Le => "<=",
                 _ => unreachable!(),
             };
-            frag.push(&format!("{col} {sym} ?"));
+            frag.where_clause.push_str(&format!("{col} {sym} ?"));
             frag.params.push(SqlParam::Text(val.to_string()));
         }
     }
@@ -159,7 +150,7 @@ fn write_numeric(frag: &mut SqlFragment, col: &str, op: CmpOp, val: i64) {
         CmpOp::Contains => "=",
         CmpOp::NotContains => "!=",
     };
-    frag.push(&format!("{col} {sym} ?"));
+    frag.where_clause.push_str(&format!("{col} {sym} ?"));
     frag.params.push(SqlParam::Int(val));
 }
 
