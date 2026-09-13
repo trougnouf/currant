@@ -8,6 +8,8 @@
 
 use crate::matcher::{self, SqlParam};
 use crate::model::{Album, Artist, QueueSnapshot, SmartPlaylist, SortPreset, Track};
+use crate::text;
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use std::path::Path;
 use std::sync::Mutex;
@@ -22,6 +24,11 @@ CREATE TABLE IF NOT EXISTS tracks (
     album         TEXT NOT NULL,
     genre         TEXT NOT NULL,
     comment       TEXT NOT NULL,
+    title_fold    TEXT NOT NULL DEFAULT '',
+    artist_fold   TEXT NOT NULL DEFAULT '',
+    album_fold    TEXT NOT NULL DEFAULT '',
+    genre_fold    TEXT NOT NULL DEFAULT '',
+    comment_fold  TEXT NOT NULL DEFAULT '',
     track_number  INTEGER NOT NULL DEFAULT 0,
     year          INTEGER NOT NULL DEFAULT 0,
     duration_secs INTEGER NOT NULL DEFAULT 0,
@@ -38,9 +45,26 @@ CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_year  ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_tracks_path  ON tracks(path);
 CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(album_artist, album, track_number, title);
+CREATE INDEX IF NOT EXISTS idx_tracks_title_fold  ON tracks(title_fold);
+CREATE INDEX IF NOT EXISTS idx_tracks_artist_fold ON tracks(artist_fold);
+CREATE INDEX IF NOT EXISTS idx_tracks_album_fold  ON tracks(album_fold);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 ";
+
+/// Register the `fold` scalar function for accent-insensitive, case-insensitive
+/// text matching. Must be called on every connection that runs search queries.
+fn register_fold(conn: &Connection) -> rusqlite::Result<()> {
+    conn.create_scalar_function(
+        "fold",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| {
+            let s = ctx.get::<String>(0)?;
+            Ok(text::fold(&s))
+        },
+    )
+}
 
 /// A page of filter results plus the total match count.
 #[derive(Debug, Clone)]
@@ -68,12 +92,14 @@ impl LibraryStore {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        register_fold(&conn)?;
         migrate(&conn);
 
         let read_conn = Connection::open(path)?;
         read_conn.pragma_update(None, "journal_mode", "WAL")?;
         read_conn.pragma_update(None, "query_only", "ON")?;
         read_conn.execute_batch(SCHEMA)?;
+        register_fold(&read_conn)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -85,6 +111,7 @@ impl LibraryStore {
     pub fn open_memory() -> rusqlite::Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        register_fold(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             read_conn: None,
@@ -121,11 +148,17 @@ impl LibraryStore {
             Some(r) => r,
             None => (track.rating, track.play_count, track.last_played),
         };
+        let title_fold = text::fold(&track.title);
+        let artist_fold = text::fold(&track.artist);
+        let album_fold = text::fold(&track.album);
+        let genre_fold = text::fold(&track.genre);
+        let comment_fold = text::fold(&track.comment);
         conn.execute(
             "INSERT OR REPLACE INTO tracks
                 (id, path, title, artist, album_artist, album, genre, comment,
+                 title_fold, artist_fold, album_fold, genre_fold, comment_fold,
                  track_number, year, duration_secs, rating, play_count, last_played, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             rusqlite::params![
                 track.id,
                 track.path,
@@ -135,6 +168,11 @@ impl LibraryStore {
                 track.album,
                 track.genre,
                 track.comment,
+                title_fold,
+                artist_fold,
+                album_fold,
+                genre_fold,
+                comment_fold,
                 track.track_number,
                 track.year,
                 track.duration_secs,
@@ -720,6 +758,36 @@ fn migrate(conn: &Connection) {
         // Backfill: copy artist into album_artist for existing rows.
         let _ = conn.execute("UPDATE tracks SET album_artist = artist", []);
     }
+
+    // Add pre-folded shadow columns for accent-insensitive search.
+    for (fold_col, src_col) in [
+        ("title_fold", "title"),
+        ("artist_fold", "artist"),
+        ("album_fold", "album"),
+        ("genre_fold", "genre"),
+        ("comment_fold", "comment"),
+    ] {
+        let has_col: bool = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = '{fold_col}'"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if !has_col {
+            let _ = conn.execute(
+                &format!("ALTER TABLE tracks ADD COLUMN {fold_col} TEXT NOT NULL DEFAULT ''"),
+                [],
+            );
+            let _ = conn.execute(
+                &format!("UPDATE tracks SET {fold_col} = fold({src_col})"),
+                [],
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -788,6 +856,39 @@ mod tests {
 
         let ra = store.random_album_tracks(&parse_query(""));
         assert!(!ra.is_empty());
+    }
+
+    #[test]
+    fn accent_insensitive_search() {
+        let store = LibraryStore::open_memory().unwrap();
+        store
+            .upsert_track(&t("1", "Café Bleu", "Beyoncé", "Fiançailles", 2020))
+            .unwrap();
+        store
+            .upsert_track(&t("2", "Plain", "Miles Davis", "Kind of Blue", 1959))
+            .unwrap();
+
+        // Free text matches accented title without typing accents.
+        let expr = parse_query("cafe");
+        let page = store.filter(&expr, SortPreset::ArtistAlbumTrack, 100, 0);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.tracks[0].title, "Café Bleu");
+
+        // Free text matches accented artist.
+        let expr = parse_query("beyonce");
+        let page = store.filter(&expr, SortPreset::ArtistAlbumTrack, 100, 0);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.tracks[0].artist, "Beyoncé");
+
+        // Field-specific search with accents.
+        let expr = parse_query("ar:beYonce");
+        let page = store.filter(&expr, SortPreset::ArtistAlbumTrack, 100, 0);
+        assert_eq!(page.total, 1);
+
+        // Search with accents matches plain text too.
+        let expr = parse_query("café");
+        let page = store.filter(&expr, SortPreset::ArtistAlbumTrack, 100, 0);
+        assert_eq!(page.total, 1);
     }
 
     #[test]

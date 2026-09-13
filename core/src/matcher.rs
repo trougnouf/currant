@@ -24,6 +24,7 @@
 //! The default operator is `contains` for text fields and `eq` for numeric ones.
 
 use crate::model::{CmpOp, Field, SortPreset};
+use crate::text;
 
 /// A bound parameter value produced by the SQL compiler.
 #[derive(Debug, Clone)]
@@ -72,8 +73,8 @@ impl SearchExpr {
             SearchExpr::Str(field, op, val) => match field {
                 Field::All => {
                     frag.where_clause
-                        .push_str("(title LIKE ? OR artist LIKE ? OR album LIKE ?)");
-                    let p = format!("%{val}%");
+                        .push_str("(title_fold LIKE ? OR artist_fold LIKE ? OR album_fold LIKE ?)");
+                    let p = format!("%{}%", text::fold(val));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p));
@@ -83,7 +84,7 @@ impl SearchExpr {
                         write_numeric(frag, field.column(), *op, n);
                     }
                 }
-                f => write_text(frag, f.column(), *op, val),
+                f => write_text(frag, f.fold_column(), *op, val),
             },
             SearchExpr::Num(field, op, val) => {
                 write_numeric(frag, field.column(), *op, *val);
@@ -112,24 +113,23 @@ impl SearchExpr {
 }
 
 fn write_text(frag: &mut SqlFragment, col: &str, op: CmpOp, val: &str) {
+    let fv = text::fold(val);
     match op {
         CmpOp::Contains => {
             frag.where_clause.push_str(&format!("{col} LIKE ?"));
-            frag.params.push(SqlParam::Text(format!("%{val}%")));
+            frag.params.push(SqlParam::Text(format!("%{fv}%")));
         }
         CmpOp::NotContains => {
             frag.where_clause.push_str(&format!("{col} NOT LIKE ?"));
-            frag.params.push(SqlParam::Text(format!("%{val}%")));
+            frag.params.push(SqlParam::Text(format!("%{fv}%")));
         }
         CmpOp::Eq => {
-            frag.where_clause
-                .push_str(&format!("lower({col}) = lower(?)"));
-            frag.params.push(SqlParam::Text(val.to_string()));
+            frag.where_clause.push_str(&format!("{col} = ?"));
+            frag.params.push(SqlParam::Text(fv));
         }
         CmpOp::NotEq => {
-            frag.where_clause
-                .push_str(&format!("lower({col}) != lower(?)"));
-            frag.params.push(SqlParam::Text(val.to_string()));
+            frag.where_clause.push_str(&format!("{col} != ?"));
+            frag.params.push(SqlParam::Text(fv));
         }
         CmpOp::Gt | CmpOp::Ge | CmpOp::Lt | CmpOp::Le => {
             let sym = match op {
@@ -140,7 +140,7 @@ fn write_text(frag: &mut SqlFragment, col: &str, op: CmpOp, val: &str) {
                 _ => unreachable!(),
             };
             frag.where_clause.push_str(&format!("{col} {sym} ?"));
-            frag.params.push(SqlParam::Text(val.to_string()));
+            frag.params.push(SqlParam::Text(fv));
         }
     }
 }
@@ -527,7 +527,7 @@ mod tests {
     fn parses_field_contains() {
         let e = parse_query("ar:pink");
         let sql = e.to_sql();
-        assert!(sql.where_clause.contains("artist LIKE ?"));
+        assert!(sql.where_clause.contains("artist_fold LIKE ?"));
         assert_eq!(sql.params.len(), 1);
         match &sql.params[0] {
             SqlParam::Text(t) => assert_eq!(t, "%pink%"),
@@ -555,16 +555,16 @@ mod tests {
         assert!(e.to_sql().where_clause.contains("rating >= ?"));
 
         let e = parse_query("title:love");
-        assert!(e.to_sql().where_clause.contains("title LIKE ?"));
+        assert!(e.to_sql().where_clause.contains("title_fold LIKE ?"));
 
         let e = parse_query("artist:pink");
-        assert!(e.to_sql().where_clause.contains("artist LIKE ?"));
+        assert!(e.to_sql().where_clause.contains("artist_fold LIKE ?"));
 
         let e = parse_query("album:kind");
-        assert!(e.to_sql().where_clause.contains("album LIKE ?"));
+        assert!(e.to_sql().where_clause.contains("album_fold LIKE ?"));
 
         let e = parse_query("genre:jazz");
-        assert!(e.to_sql().where_clause.contains("genre LIKE ?"));
+        assert!(e.to_sql().where_clause.contains("genre_fold LIKE ?"));
 
         let e = parse_query("playcount:0");
         assert!(e.to_sql().where_clause.contains("play_count = ?"));
@@ -596,6 +596,6 @@ mod tests {
     fn parses_equals_and_not_equals() {
         let e = parse_query("al:=kind of blue");
         let sql = e.to_sql();
-        assert!(sql.where_clause.contains("lower(album) = lower(?)"));
+        assert!(sql.where_clause.contains("album_fold = ?"));
     }
 }

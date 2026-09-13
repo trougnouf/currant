@@ -63,6 +63,19 @@ impl Field {
         }
     }
 
+    /// The pre-folded shadow column used for accent-insensitive search.
+    /// Returns `""` for numeric fields and `All` (handled separately).
+    pub fn fold_column(self) -> &'static str {
+        match self {
+            Field::Title => "title_fold",
+            Field::Artist => "artist_fold",
+            Field::Album => "album_fold",
+            Field::Genre => "genre_fold",
+            Field::Comment => "comment_fold",
+            _ => "",
+        }
+    }
+
     /// True for text fields compared with `LIKE`/`=`, false for numeric ones.
     pub fn is_text(self) -> bool {
         matches!(
