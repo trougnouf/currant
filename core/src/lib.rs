@@ -8,6 +8,7 @@ pub mod model;
 pub mod scanner;
 pub mod scrobble;
 pub mod store;
+pub mod vorbis_ext;
 
 #[cfg(feature = "android")]
 uniffi::setup_scaffolding!();
