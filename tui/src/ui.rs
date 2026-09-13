@@ -182,7 +182,8 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
         return;
     }
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
-    let width = area.width.saturating_sub(6) as usize;
+    let stop_id = app.stop_after.as_deref();
+    let width = area.width.saturating_sub(7) as usize;
     let cols = app.col_widths();
     let rows: Vec<ListItem> = e
         .tracks
@@ -192,6 +193,7 @@ fn draw_expanded(f: &mut Frame, app: &App, area: Rect, e: &crate::app::ExpandedV
                 t,
                 app.view,
                 playing_id == Some(&t.id),
+                stop_id == Some(t.id.as_str()),
                 &cols,
                 width,
             ))
@@ -280,7 +282,8 @@ fn draw_tracks(
 ) {
     let title = format!("{title} - {} of {} (from #{})", items.len(), total, offset);
     let playing_id = app.now_playing.as_ref().map(|t| &t.id);
-    let width = area.width.saturating_sub(5) as usize; // borders + highlight symbol
+    let stop_id = app.stop_after.as_deref();
+    let width = area.width.saturating_sub(6) as usize; // borders + highlight + markers
     let cols = app.col_widths();
     let rows: Vec<ListItem> = items
         .iter()
@@ -289,6 +292,7 @@ fn draw_tracks(
                 t,
                 app.view,
                 playing_id == Some(&t.id),
+                stop_id == Some(t.id.as_str()),
                 &cols,
                 width,
             ))
@@ -318,12 +322,19 @@ fn track_line<'a>(
     t: &'a Track,
     view: ViewPreset,
     playing: bool,
+    stop_after: bool,
     cols: &ColumnWidths,
     width: usize,
 ) -> Line<'a> {
-    let marker = if playing { ">" } else { " " };
-    let marker_style = if playing {
+    let playing_marker = if playing { ">" } else { " " };
+    let playing_style = if playing {
         Style::default().fg(theme::NOW_PLAYING).bold()
+    } else {
+        Style::default()
+    };
+    let stop_marker = if stop_after { "|" } else { " " };
+    let stop_style = if stop_after {
+        Style::default().fg(theme::STOP_AFTER).bold()
     } else {
         Style::default()
     };
@@ -349,9 +360,14 @@ fn track_line<'a>(
         String::new()
     };
 
-    // Build column spans: marker, artist, [album], title (track_no + title),
-    // [year], [genre], duration. Single-space separators between columns.
-    let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
+    // Build column spans: playing marker, stop marker, separator, artist,
+    // [album], title (track_no + title), [year], [genre], duration. Single-space
+    // separators between columns.
+    let mut spans = vec![
+        Span::styled(playing_marker, playing_style),
+        Span::styled(stop_marker, stop_style),
+        Span::raw(" "),
+    ];
 
     // Artist (left-aligned).
     spans.push(Span::styled(col_text(&t.artist, cols.artist), artist_style));
@@ -484,6 +500,7 @@ fn draw_artists(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
     let (rows, selected) = app.queue_view();
+    let stop_id = app.stop_after.as_deref();
     let items: Vec<ListItem> = rows
         .iter()
         .map(|r| {
@@ -492,8 +509,15 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
                 QueueKind::Explicit => ("+", theme::QUEUE_EXPLICIT),
                 QueueKind::Dynamic => ("~", theme::QUEUE_DYNAMIC),
             };
+            let stop = if stop_id == Some(r.id.as_str()) {
+                Span::styled("|", Style::default().fg(theme::STOP_AFTER).bold())
+            } else {
+                Span::raw(" ")
+            };
             Line::from(vec![
                 Span::styled(format!("{mark} "), Style::default().fg(color).bold()),
+                stop,
+                Span::raw(" "),
                 Span::styled(r.artist.clone(), Style::default().fg(theme::ARTIST)),
                 Span::raw(" - "),
                 Span::raw(r.title.clone()),
@@ -588,7 +612,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         } else {
             theme::PAUSED
         };
-        let stop = if app.stop_after { " [stop after]" } else { "" };
+        let stop = if app.stop_after.is_some() {
+            " [stop after]"
+        } else {
+            ""
+        };
         vec![
             Span::styled(
                 format!("{}: ", if app.is_playing { "playing" } else { "paused" }),
@@ -703,7 +731,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ("e", "enqueue (append to queue)"),
         ("N", "play next (front of queue)"),
         ("x", "remove from queue / delete playlist"),
-        ("S", "stop after current"),
+        ("S", "stop after selected track (toggle)"),
         ("0-5", "rate track (0 clears)"),
         ("c", "cycle columns (minimal / compact / full)"),
         ("s", "cycle sort"),

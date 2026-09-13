@@ -197,7 +197,7 @@ pub struct App {
     // view model rebuilt each refresh
     pub now_playing: Option<Track>,
     pub is_playing: bool,
-    pub stop_after: bool,
+    pub stop_after: Option<String>,
     pub track_count: u64,
     pub radio_sort: Option<SortPreset>,
     pub volume: f32,
@@ -256,7 +256,7 @@ impl App {
             prev_playing_id: None,
             now_playing: None,
             is_playing: false,
-            stop_after: false,
+            stop_after: None,
             track_count: 0,
             radio_sort: None,
             volume: 1.0,
@@ -293,7 +293,7 @@ impl App {
         let expr = parse_query(&self.search);
         self.now_playing = c.current_track_ref();
         self.is_playing = c.is_playing;
-        self.stop_after = c.stop_after_current;
+        self.stop_after = c.stop_after.clone();
         self.track_count = c.store.track_count();
         self.radio_sort = Some(c.dynamic_sort());
         self.volume = c.volume;
@@ -742,11 +742,18 @@ impl App {
                 self.status = format!("sort: {}", sort_label(self.sort));
             }
             KeyCode::Char('S') => {
-                c.dispatch(PlayerIntent::StopAfterCurrent);
-                self.status = if c.stop_after_current {
-                    "stop after current: on".into()
-                } else {
-                    "stop after current: off".into()
+                let id = self.selected_track_id(c).unwrap_or_default();
+                c.dispatch(PlayerIntent::StopAfter { id });
+                self.status = match &c.stop_after {
+                    Some(sid) => {
+                        let label = c
+                            .store
+                            .get_track(sid)
+                            .map(|t| format!("{} - {}", t.artist, t.title))
+                            .unwrap_or_else(|| sid.clone());
+                        format!("stop after: {label}")
+                    }
+                    None => "stop after: off".into(),
                 };
             }
             KeyCode::Char('r') => self.toggle_radio(c),

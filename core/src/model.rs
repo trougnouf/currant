@@ -192,7 +192,7 @@ pub enum PlayerIntent {
     TogglePlayPause,
     NextTrack,
     PreviousTrack,
-    StopAfterCurrent,
+    StopAfter { id: String },
     SetVolume { volume: f32 },
 
     // Metadata

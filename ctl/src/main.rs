@@ -55,7 +55,10 @@ fn build_request(cmd: &str, args: &[String]) -> Result<ControlRequest, String> {
         ("play-pause" | "toggle", 0) => PlayerIntent::TogglePlayPause,
         ("next", 0) => PlayerIntent::NextTrack,
         ("prev" | "previous", 0) => PlayerIntent::PreviousTrack,
-        ("stop-after", 0) => PlayerIntent::StopAfterCurrent,
+        ("stop-after", 0) => PlayerIntent::StopAfter { id: String::new() },
+        ("stop-after", 1) => PlayerIntent::StopAfter {
+            id: args[0].clone(),
+        },
         ("clear", 0) => PlayerIntent::ClearQueue,
         ("status", 0) => return Ok(ControlRequest::Status),
         ("volume", 1) => {
@@ -141,7 +144,7 @@ fn print_usage() {
     eprintln!("  play-pause          toggle playback");
     eprintln!("  next                skip to next track");
     eprintln!("  prev                go to previous track");
-    eprintln!("  stop-after          stop after the current track");
+    eprintln!("  stop-after [id]     stop after the current or given track");
     eprintln!("  clear               clear the queue");
     eprintln!("  volume <0-100>      set volume percentage");
     eprintln!("  play <id>           play a track immediately");

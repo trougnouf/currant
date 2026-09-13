@@ -24,7 +24,7 @@ pub struct PlayerController {
     pub dynamic_queue: Vec<String>,
     pub history: Vec<String>,
     pub current_track: Option<String>,
-    pub stop_after_current: bool,
+    pub stop_after: Option<String>,
     pub is_playing: bool,
     pub volume: f32,
 
@@ -46,7 +46,7 @@ impl PlayerController {
             dynamic_queue: Vec::new(),
             history: Vec::new(),
             current_track: None,
-            stop_after_current: false,
+            stop_after: None,
             is_playing: false,
             volume: 1.0,
             dynamic_query: SearchExpr::Str(
@@ -83,10 +83,17 @@ impl PlayerController {
     /// Decide which track to play next. Sets `current_track` and returns its id,
     /// or `None` when the queue is exhausted (and `is_playing` is cleared).
     pub fn determine_next_track(&mut self) -> Option<String> {
-        if self.stop_after_current {
-            self.stop_after_current = false;
-            self.is_playing = false;
-            return None;
+        // Stop after a specific track: halt when the track that just finished
+        // is the one the user marked. `current_track` is still set when
+        // `determine_next_track` is called directly (tests, natural end before
+        // NextTrack clears it); `history.last()` covers the NextTrack path.
+        if let Some(stop_id) = &self.stop_after {
+            let just_finished = self.current_track.as_ref().or_else(|| self.history.last());
+            if just_finished == Some(stop_id) {
+                self.stop_after = None;
+                self.is_playing = false;
+                return None;
+            }
         }
 
         // 1. The explicit queue always wins (play-next / user-enqueued tracks).
@@ -225,15 +232,38 @@ impl PlayerController {
                 self.is_playing = !self.is_playing;
             }
             PlayerIntent::NextTrack => {
-                // Move the current track to history and let the audio thread
+                // Push the current track to history so album continuation
+                // and stop-after can still see it, then let the audio thread
                 // pull the next one.
-                self.current_track = None;
+                if let Some(cur) = self.current_track.take() {
+                    self.history.push(cur);
+                    if self.history.len() > HISTORY_CAP {
+                        self.history.remove(0);
+                    }
+                }
             }
             PlayerIntent::PreviousTrack => {
                 self.previous_track();
             }
-            PlayerIntent::StopAfterCurrent => {
-                self.stop_after_current = !self.stop_after_current;
+            PlayerIntent::StopAfter { id } => {
+                // Empty id means "the current track" (CLI compat).
+                let target = if id.is_empty() {
+                    match &self.current_track {
+                        Some(c) => c.clone(),
+                        None => {
+                            self.stop_after = None;
+                            return;
+                        }
+                    }
+                } else {
+                    id
+                };
+                // Toggle: pressing again on the same track cancels.
+                if self.stop_after.as_deref() == Some(&target) {
+                    self.stop_after = None;
+                } else {
+                    self.stop_after = Some(target);
+                }
             }
             PlayerIntent::SetVolume { volume } => {
                 self.volume = volume.clamp(0.0, 1.0);
@@ -305,7 +335,10 @@ impl PlayerController {
             SortPreset::RandomAlbum => {
                 // Continue the album the current track belongs to before jumping
                 // to a random one, so playing a track mid-album plays the rest of it.
-                if let Some(cur_id) = self.current_track.as_ref()
+                // After NextTrack, current_track is None but history.last() holds
+                // the track that just finished — use it to continue its album.
+                let cont_id = self.current_track.as_ref().or_else(|| self.history.last());
+                if let Some(cur_id) = cont_id
                     && let Some(cur) = self.store.get_track(cur_id)
                 {
                     let remaining = self.store.album_tracks_after(
@@ -415,9 +448,47 @@ mod tests {
             next: true,
         });
         c.determine_next_track();
-        c.dispatch(PlayerIntent::StopAfterCurrent);
+        // Empty id = stop after the current track.
+        c.dispatch(PlayerIntent::StopAfter { id: String::new() });
         assert!(c.determine_next_track().is_none());
         assert!(!c.is_playing);
+    }
+
+    #[test]
+    fn stop_after_specific_track() {
+        let store = make_store();
+        let mut c = PlayerController::new(store);
+        // Queue: track 1 (explicit), then dynamic album continuation 2..4.
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        c.determine_next_track(); // plays 1
+        // Mark track 3 as the stop-after target (two tracks ahead).
+        c.dispatch(PlayerIntent::StopAfter { id: "3".into() });
+        assert_eq!(c.stop_after.as_deref(), Some("3"));
+        // Track 1 finishes → should NOT stop (stop target is 3).
+        c.dispatch(PlayerIntent::NextTrack);
+        assert_eq!(c.determine_next_track().as_deref(), Some("2"));
+        // Track 2 finishes → should NOT stop.
+        c.dispatch(PlayerIntent::NextTrack);
+        assert_eq!(c.determine_next_track().as_deref(), Some("3"));
+        // Track 3 finishes → should stop.
+        c.dispatch(PlayerIntent::NextTrack);
+        assert!(c.determine_next_track().is_none());
+        assert!(!c.is_playing);
+        // stop_after was consumed.
+        assert!(c.stop_after.is_none());
+    }
+
+    #[test]
+    fn stop_after_toggles_off() {
+        let store = make_store();
+        let mut c = PlayerController::new(store);
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        c.determine_next_track();
+        c.dispatch(PlayerIntent::StopAfter { id: "1".into() });
+        assert!(c.stop_after.is_some());
+        // Same id again cancels.
+        c.dispatch(PlayerIntent::StopAfter { id: "1".into() });
+        assert!(c.stop_after.is_none());
     }
 
     #[test]
@@ -460,6 +531,28 @@ mod tests {
         // After track 1 finishes, the rest of the album should play in order.
         assert_eq!(c.determine_next_track().as_deref(), Some("2"));
         assert_eq!(c.determine_next_track().as_deref(), Some("3"));
+        assert_eq!(c.determine_next_track().as_deref(), Some("4"));
+    }
+
+    #[test]
+    fn random_album_continues_after_next_track() {
+        // Regression: pressing Next after a manually-played track must
+        // continue the same album, not jump to a random one. The bug was
+        // that NextTrack cleared current_track, so repopulate_dynamic_queue
+        // could not find the album to continue.
+        let store = make_store();
+        let mut c = PlayerController::new(store);
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        assert_eq!(c.determine_next_track().as_deref(), Some("1"));
+
+        // Simulate the audio thread: dispatch NextTrack, then pull next.
+        c.dispatch(PlayerIntent::NextTrack);
+        assert_eq!(c.determine_next_track().as_deref(), Some("2"));
+
+        c.dispatch(PlayerIntent::NextTrack);
+        assert_eq!(c.determine_next_track().as_deref(), Some("3"));
+
+        c.dispatch(PlayerIntent::NextTrack);
         assert_eq!(c.determine_next_track().as_deref(), Some("4"));
     }
 
