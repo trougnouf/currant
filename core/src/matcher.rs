@@ -157,7 +157,7 @@ fn write_numeric(frag: &mut SqlFragment, col: &str, op: CmpOp, val: i64) {
 /// Compile a sort preset into a SQL ORDER BY clause.
 pub fn sort_to_order_by(sort: SortPreset) -> &'static str {
     match sort {
-        SortPreset::ArtistAlbumTrack => "artist, album, track_number, title",
+        SortPreset::ArtistAlbumTrack => "album_artist, album, track_number, title",
         SortPreset::YearDesc => "year DESC, artist, album, track_number",
         SortPreset::MostPlayed => "play_count DESC, artist, album, track_number",
         SortPreset::HighestRated => "rating DESC, artist, album, track_number",

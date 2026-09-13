@@ -156,6 +156,10 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         .and_then(|t| t.artist().as_deref().map(String::from))
         .unwrap_or_else(|| "Unknown Artist".to_string());
 
+    let album_artist = tag
+        .and_then(|t| t.get_string(ItemKey::AlbumArtist).map(String::from))
+        .unwrap_or_else(|| artist.clone());
+
     let album = tag
         .and_then(|t| t.album().as_deref().map(String::from))
         .unwrap_or_else(|| "Unknown Album".to_string());
@@ -197,6 +201,7 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         path: path.to_string_lossy().to_string(),
         title,
         artist,
+        album_artist,
         album,
         genre,
         comment,

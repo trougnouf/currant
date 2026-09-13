@@ -12,6 +12,7 @@ pub struct Track {
     pub path: String,
     pub title: String,
     pub artist: String,
+    pub album_artist: String,
     pub album: String,
     pub genre: String,
     pub comment: String,

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     path          TEXT NOT NULL,
     title         TEXT NOT NULL,
     artist        TEXT NOT NULL,
+    album_artist  TEXT NOT NULL,
     album         TEXT NOT NULL,
     genre         TEXT NOT NULL,
     comment       TEXT NOT NULL,
@@ -30,12 +31,13 @@ CREATE TABLE IF NOT EXISTS tracks (
     file_mtime    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album  ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_year  ON tracks(year);
 CREATE INDEX IF NOT EXISTS idx_tracks_path  ON tracks(path);
-CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(artist, album, track_number, title);
+CREATE INDEX IF NOT EXISTS idx_tracks_sort  ON tracks(album_artist, album, track_number, title);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 ";
@@ -66,6 +68,7 @@ impl LibraryStore {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn);
 
         let read_conn = Connection::open(path)?;
         read_conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -120,14 +123,15 @@ impl LibraryStore {
         };
         conn.execute(
             "INSERT OR REPLACE INTO tracks
-                (id, path, title, artist, album, genre, comment,
+                (id, path, title, artist, album_artist, album, genre, comment,
                  track_number, year, duration_secs, rating, play_count, last_played, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             rusqlite::params![
                 track.id,
                 track.path,
                 track.title,
                 track.artist,
+                track.album_artist,
                 track.album,
                 track.genre,
                 track.comment,
@@ -146,7 +150,7 @@ impl LibraryStore {
     pub fn get_track(&self, id: &str) -> Option<Track> {
         let conn = self.read_conn();
         conn.query_row(
-            "SELECT id, path, title, artist, album, genre, comment,
+            "SELECT id, path, title, artist, album_artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime
              FROM tracks WHERE id = ?1",
             rusqlite::params![id],
@@ -265,7 +269,7 @@ impl LibraryStore {
         };
 
         let sql = format!(
-            "SELECT id, path, title, artist, album, genre, comment,
+            "SELECT id, path, title, artist, album_artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime
              FROM tracks {where_sql}
              ORDER BY {order}
@@ -288,7 +292,7 @@ impl LibraryStore {
 
         // Pick a random album (artist, album) pair.
         let pick_sql = format!(
-            "SELECT artist, album FROM tracks {where_sql} GROUP BY artist, album ORDER BY RANDOM() LIMIT 1"
+            "SELECT album_artist, album FROM tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
         );
         let pair: Option<(String, String)> = if frag.where_clause.is_empty() {
             conn.query_row(&pick_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -306,9 +310,9 @@ impl LibraryStore {
             return Vec::new();
         };
 
-        let sql = "SELECT id, path, title, artist, album, genre, comment,
+        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE artist = ?1 AND album = ?2
+                   FROM tracks WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -335,11 +339,11 @@ impl LibraryStore {
             format!("WHERE {}", frag.where_clause)
         };
         let sql = format!(
-            "SELECT artist, album, MAX(year) AS year, COUNT(*) AS track_count,
+            "SELECT album_artist, album, MAX(year) AS year, COUNT(*) AS track_count,
                     SUM(duration_secs) AS total
              FROM tracks {where_sql}
-             GROUP BY artist, album
-             ORDER BY artist, album"
+             GROUP BY album_artist, album
+             ORDER BY album_artist, album"
         );
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
@@ -410,12 +414,12 @@ impl LibraryStore {
         out
     }
 
-    /// Tracks for a single album (artist + album), in track order.
+    /// Tracks for a single album (album_artist + album), in track order.
     pub fn album_tracks(&self, artist: &str, album: &str) -> Vec<Track> {
         let conn = self.read_conn();
-        let sql = "SELECT id, path, title, artist, album, genre, comment,
+        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE artist = ?1 AND album = ?2
+                   FROM tracks WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -432,7 +436,7 @@ impl LibraryStore {
     /// Tracks for a single artist.
     pub fn artist_tracks(&self, artist: &str) -> Vec<Track> {
         let conn = self.read_conn();
-        let sql = "SELECT id, path, title, artist, album, genre, comment,
+        let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
                    FROM tracks WHERE artist = ?1
                    ORDER BY album, track_number, title";
@@ -584,17 +588,39 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         path: row.get(1)?,
         title: row.get(2)?,
         artist: row.get(3)?,
-        album: row.get(4)?,
-        genre: row.get(5)?,
-        comment: row.get(6)?,
-        track_number: row.get::<_, i64>(7).unwrap_or(0) as u32,
-        year: row.get::<_, i64>(8).unwrap_or(0) as u32,
-        duration_secs: row.get::<_, i64>(9).unwrap_or(0) as u32,
-        rating: row.get::<_, i64>(10).unwrap_or(0) as u8,
-        play_count: row.get::<_, i64>(11).unwrap_or(0) as u32,
-        last_played: row.get(12)?,
-        file_mtime: row.get::<_, i64>(13).unwrap_or(0),
+        album_artist: row.get(4)?,
+        album: row.get(5)?,
+        genre: row.get(6)?,
+        comment: row.get(7)?,
+        track_number: row.get::<_, i64>(8).unwrap_or(0) as u32,
+        year: row.get::<_, i64>(9).unwrap_or(0) as u32,
+        duration_secs: row.get::<_, i64>(10).unwrap_or(0) as u32,
+        rating: row.get::<_, i64>(11).unwrap_or(0) as u8,
+        play_count: row.get::<_, i64>(12).unwrap_or(0) as u32,
+        last_played: row.get(13)?,
+        file_mtime: row.get::<_, i64>(14).unwrap_or(0),
     })
+}
+
+/// Add columns introduced after the initial schema. SQLite doesn't support
+/// `ADD COLUMN IF NOT EXISTS`, so we check `pragma_table_info` first.
+fn migrate(conn: &Connection) {
+    let has_album_artist: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = 'album_artist'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !has_album_artist {
+        let _ = conn.execute(
+            "ALTER TABLE tracks ADD COLUMN album_artist TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        // Backfill: copy artist into album_artist for existing rows.
+        let _ = conn.execute("UPDATE tracks SET album_artist = artist", []);
+    }
 }
 
 #[cfg(test)]
@@ -609,6 +635,7 @@ mod tests {
             path: format!("/{id}"),
             title: title.into(),
             artist: artist.into(),
+            album_artist: artist.into(),
             album: album.into(),
             genre: "jazz".into(),
             comment: String::new(),

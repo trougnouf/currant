@@ -328,6 +328,7 @@ mod tests {
                 path: format!("/m/{i}.mp3"),
                 title: format!("song {i}"),
                 artist: "pink".into(),
+                album_artist: "pink".into(),
                 album: "album".into(),
                 genre: "jazz".into(),
                 comment: String::new(),
