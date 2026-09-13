@@ -40,8 +40,12 @@ impl OpusSource {
 
         while let Ok(Some(packet)) = reader.read_packet() {
             let data = &packet.data;
-            // The first packet of the Opus stream is the identification header.
-            if !seen_head && (packet.first_in_stream() || data.starts_with(b"OpusHead")) {
+            // The first packet of an Opus-in-OGG stream is the OpusHead
+            // identification header.  Match on the magic bytes, not on
+            // first_in_stream(), so that Vorbis-in-OGG files (whose first
+            // packet is the Vorbis id header "\x01vorbis") are not
+            // misidentified as Opus and fed to the Opus decoder.
+            if !seen_head && data.starts_with(b"OpusHead") {
                 channels = data
                     .get(9)
                     .copied()

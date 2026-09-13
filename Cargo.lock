@@ -274,6 +274,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "unicode-normalization",
  "uniffi",
  "ureq",
  "uuid",
@@ -2524,6 +2525,7 @@ dependencies = [
  "symphonia-bundle-mp3",
  "symphonia-codec-vorbis",
  "symphonia-core",
+ "symphonia-format-ogg",
  "symphonia-format-riff",
  "symphonia-metadata",
 ]
@@ -2574,6 +2576,18 @@ dependencies = [
  "bytemuck",
  "lazy_static",
  "log",
+]
+
+[[package]]
+name = "symphonia-format-ogg"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b4955c67c1ed3aa8ae8428d04ca8397fbef6a19b2b051e73b5da8b1435639cb"
+dependencies = [
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
+ "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -2836,6 +2850,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cf0ded5c4e56918d8f8a339e1bb67d038d3bc6d144ac407904015ba2e4cde9b"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
 name = "tokio"
 version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2931,6 +2960,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
