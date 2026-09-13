@@ -26,8 +26,31 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_footer(f, app, chunks[2]);
 
     if app.help {
-        draw_help(f, f.area(), app);
+        draw_help(f, centered(f.area(), 70, 80), app);
     }
+    if let Some(track) = &app.details {
+        draw_details(f, centered(f.area(), 70, 60), track);
+    }
+}
+
+/// A centered rect inside `area` with the given width/height percentages.
+fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
+    let popup = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_pct) / 2),
+            Constraint::Percentage(height_pct),
+            Constraint::Percentage((100 - height_pct) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_pct) / 2),
+            Constraint::Percentage(width_pct),
+            Constraint::Percentage((100 - width_pct) / 2),
+        ])
+        .split(popup[1])[1]
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -215,7 +238,7 @@ fn draw_queue(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("queue - {} (Enter:play  x:remove)", rows.len())),
+                .title(format!("queue - {} (Enter:jump to  x:remove)", rows.len())),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol(">> ");
@@ -342,11 +365,15 @@ fn tab_hint(tab: Tab) -> String {
         "  Tab:tabs  /:search  p:play  >:next <:prev  +/-:vol  h/l:seek  ?:help  Ctrl+C:quit";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
-            "Enter:play  q:queue  n:next  x:remove  0-5:rate  c:view  r:sort  m/R:radio  s:stop-after"
+            "Enter:play  q:queue  n:next  x:remove  0-5:rate  d:details  c:view  r:sort  m/R:radio  s:stop-after"
         }
-        Tab::Albums => "Enter:play album  q:queue album  n:next  c:view  r:sort  m/R:radio",
-        Tab::Artists => "Enter:play artist  q:queue artist  n:next  c:view  r:sort  m/R:radio",
-        Tab::Queue => "Enter:play  x:remove  s:stop-after  c:view",
+        Tab::Albums => {
+            "Enter:play album  q:queue album  n:next  d:details  c:view  r:sort  m/R:radio"
+        }
+        Tab::Artists => {
+            "Enter:play artist  q:queue artist  n:next  d:details  c:view  r:sort  m/R:radio"
+        }
+        Tab::Queue => "Enter:jump to  x:remove  s:stop-after  d:details  c:view",
         Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
     };
     format!("{actions}{universal}")
@@ -371,6 +398,7 @@ p > <             play/pause, next, previous
 </> (h/l)         seek backward/forward 5s    H/L seek 30s
 P                 save current search as a smart playlist
 g1-9              activate saved playlist by index (or use playlists tab)
+d                 show track details (path, metadata, etc.)
 Ctrl+C / Esc      quit
 
 search syntax:
@@ -396,4 +424,41 @@ search syntax:
     }
     let para = Paragraph::new(text).block(block);
     f.render_widget(para, area);
+}
+
+fn draw_details(f: &mut Frame, area: Rect, track: &Track) {
+    let lines = vec![
+        Line::from(vec![Span::raw("title:  "), Span::raw(&track.title)]),
+        Line::from(vec![Span::raw("artist: "), Span::raw(&track.artist)]),
+        Line::from(vec![Span::raw("album:  "), Span::raw(&track.album)]),
+        Line::from(vec![
+            Span::raw("album_artist: "),
+            Span::raw(&track.album_artist),
+        ]),
+        Line::from(vec![Span::raw("genre:  "), Span::raw(&track.genre)]),
+        Line::from(vec![Span::raw("comment: "), Span::raw(&track.comment)]),
+        Line::from(format!(
+            "track_number: {}    year: {}    duration: {}",
+            track.track_number,
+            track.year,
+            fmt_duration(track.duration_secs)
+        )),
+        Line::from(format!(
+            "rating: {}    play_count: {}    last_played: {}",
+            render_rating(track.rating),
+            track.play_count,
+            track
+                .last_played
+                .map(|ts| format!("unix:{ts}"))
+                .unwrap_or("never".into()),
+        )),
+        Line::from(""),
+        Line::from(vec![Span::raw("path: "), Span::raw(&track.path)]),
+        Line::from(format!("id:   {}", track.id)),
+        Line::from(format!("mtime: {}", track.file_mtime)),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("track details (any key to close)");
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }

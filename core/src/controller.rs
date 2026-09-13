@@ -204,6 +204,20 @@ impl PlayerController {
                 self.explicit_queue.clear();
                 self.dynamic_queue.clear();
             }
+            PlayerIntent::JumpTo { id } => {
+                // Skip to a track already in the queue without clearing the
+                // rest. Tracks before it go to history; the target becomes
+                // current. If the id is the current track, just resume.
+                if self.current_track.as_deref() == Some(&id) {
+                    self.is_playing = true;
+                    return;
+                }
+                // Remove from queues so it doesn't play again immediately.
+                self.explicit_queue.retain(|t| t != &id);
+                self.dynamic_queue.retain(|t| t != &id);
+                self.set_current(id);
+                self.is_playing = true;
+            }
             PlayerIntent::TogglePlayPause => {
                 self.is_playing = !self.is_playing;
             }

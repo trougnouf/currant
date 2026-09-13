@@ -133,6 +133,7 @@ pub struct App {
     pub view: ViewPreset,
     pub status: String,
     pub help: bool,
+    pub details: Option<Track>,
 
     tracks: WindowedView,
     files: WindowedView,
@@ -175,6 +176,7 @@ impl App {
             view: ViewPreset::Compact,
             status: String::new(),
             help: false,
+            details: None,
             tracks: WindowedView::new(),
             files: WindowedView::new(),
             albums: Vec::new(),
@@ -377,6 +379,12 @@ impl App {
     ) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // Details overlay: any key closes it.
+        if self.details.is_some() {
+            self.details = None;
+            return false;
+        }
+
         // Search mode: capture printable input until Esc/Enter.
         if self.in_search {
             match key.code {
@@ -475,6 +483,7 @@ impl App {
             KeyCode::Char('R') => self.set_radio(c, SortPreset::RandomAlbum),
             KeyCode::Char('m') => self.set_radio(c, self.sort),
             KeyCode::Char('?') => self.help = !self.help,
+            KeyCode::Char('d') => self.show_details(c),
             KeyCode::Char('P') => {
                 let name = if self.search.is_empty() {
                     format!("playlist {}", self.smart_playlists.len() + 1)
@@ -618,9 +627,15 @@ impl App {
 
     fn activate(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         match self.tab {
-            Tab::Tracks | Tab::Files | Tab::Queue => {
+            Tab::Tracks | Tab::Files => {
                 if let Some(id) = self.selected_track_id(c) {
                     c.dispatch(PlayerIntent::PlayTrack { id });
+                }
+            }
+            Tab::Queue => {
+                if let Some(id) = self.selected_track_id(c) {
+                    c.dispatch(PlayerIntent::JumpTo { id });
+                    self.status = "jumped to track".into();
                 }
             }
             Tab::Albums => {
@@ -717,6 +732,12 @@ impl App {
             SortPreset::Random => "radio: random".into(),
             _ => "radio: set".into(),
         };
+    }
+
+    fn show_details(&mut self, c: &MutexGuard<'_, PlayerController>) {
+        if let Some(id) = self.selected_track_id(c) {
+            self.details = c.store.get_track(&id);
+        }
     }
 
     fn seek_relative(&mut self, _c: &mut MutexGuard<'_, PlayerController>, delta_secs: i64) {

@@ -122,6 +122,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `Enqueue { next: bool }` — add to explicit queue (front = play next, back = append).
 *   `RemoveFromQueue` — remove from explicit and dynamic queues.
 *   `ClearQueue` — clear both queues.
+*   `JumpTo` — skip to a track already in the queue without clearing the rest. Tracks before it go to history.
 *   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `StopAfterCurrent`.
 *   `SetVolume` — 0.0 to 1.0, persisted.
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
@@ -165,10 +166,11 @@ Metadata is read and written by lofty 0.25.
 | `Tab` / `Shift+Tab` | switch tabs |
 | `j` `k` / arrows | move selection (PgUp/PgDn jump 20) |
 | `Home` / `End` | first / last |
-| `Enter` | play selection (track, album, artist, queue row) / activate playlist (playlists tab) |
+| `Enter` | play selection (track, album, artist) / jump to queue row / activate playlist |
 | `q` | enqueue (append to queue) |
 | `n` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
+| `d` | show track details (path, metadata, etc.) |
 | `s` | stop after current |
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full) |

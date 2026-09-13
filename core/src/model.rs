@@ -175,6 +175,7 @@ pub enum PlayerIntent {
     Enqueue { id: String, next: bool },
     RemoveFromQueue { id: String },
     ClearQueue,
+    JumpTo { id: String },
     TogglePlayPause,
     NextTrack,
     PreviousTrack,
