@@ -126,7 +126,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `RemoveFromQueue` — remove from explicit and dynamic queues.
 *   `ClearQueue` — clear both queues.
 *   `JumpTo` — skip to a track already in the queue without clearing the rest. Tracks before it go to history.
-*   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off.
+*   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `SkipAlbum`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off. `SkipAlbum` drops contiguous tracks of the current album from the queues and skips.
 *   `SetVolume` — 0.0 to 1.0, persisted.
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
 *   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` — smart playlist management.
@@ -185,6 +185,7 @@ Metadata is read and written by lofty 0.25.
 | `r` `R` | toggle radio (random album / random / off) |
 | `p` | play / pause |
 | `n` `>` `.` | next track |
+| `]` | skip to the next album |
 | `<` `,` | previous track |
 | `+` `-` | volume up / down |
 | `Left` `Right` / `h` `l` | seek backward / forward 5s |
@@ -228,6 +229,7 @@ One JSON line per request, one JSON line per response. `ControlRequest` is tagge
 | `play-pause` | `TogglePlayPause` | |
 | `next` | `NextTrack` | |
 | `prev` | `PreviousTrack` | |
+| `skip-album` | `SkipAlbum` | |
 | `stop-after [id]` | `StopAfter { id }` | empty id = current track; toggles off if same |
 | `clear` | `ClearQueue` | |
 | `volume <0-100>` | `SetVolume` | percentage, clamped |

@@ -164,9 +164,9 @@ fn write_numeric(frag: &mut SqlFragment, col: &str, op: CmpOp, val: i64) {
 pub fn sort_to_order_by(sort: SortPreset) -> &'static str {
     match sort {
         SortPreset::ArtistAlbumTrack => "album_artist_fold, album_fold, track_number, title_fold",
-        SortPreset::YearDesc => "year DESC, artist_fold, album_fold, track_number",
-        SortPreset::MostPlayed => "play_count DESC, artist_fold, album_fold, track_number",
-        SortPreset::HighestRated => "rating DESC, artist_fold, album_fold, track_number",
+        SortPreset::YearDesc => "year DESC, album_artist_fold, album_fold, track_number",
+        SortPreset::MostPlayed => "play_count DESC, album_artist_fold, album_fold, track_number",
+        SortPreset::HighestRated => "rating DESC, album_artist_fold, album_fold, track_number",
         SortPreset::Random => "RANDOM()",
         // Random album is handled by the controller (it picks an album first);
         // here it degrades to a random track order.

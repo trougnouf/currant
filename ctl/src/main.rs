@@ -54,6 +54,7 @@ fn build_request(cmd: &str, args: &[String]) -> Result<ControlRequest, String> {
     let intent = match (cmd, args.len()) {
         ("play-pause" | "toggle", 0) => PlayerIntent::TogglePlayPause,
         ("next", 0) => PlayerIntent::NextTrack,
+        ("skip-album", 0) => PlayerIntent::SkipAlbum,
         ("prev" | "previous", 0) => PlayerIntent::PreviousTrack,
         ("stop-after", 0) => PlayerIntent::StopAfter { id: String::new() },
         ("stop-after", 1) => PlayerIntent::StopAfter {
@@ -143,6 +144,7 @@ fn print_usage() {
     eprintln!("commands:");
     eprintln!("  play-pause          toggle playback");
     eprintln!("  next                skip to next track");
+    eprintln!("  skip-album          skip the rest of the current album");
     eprintln!("  prev                go to previous track");
     eprintln!("  stop-after [id]     stop after the current or given track");
     eprintln!("  clear               clear the queue");

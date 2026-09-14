@@ -868,6 +868,7 @@ impl App {
             KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
             KeyCode::Char('>') | KeyCode::Char('.') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('<') | KeyCode::Char(',') => c.dispatch(PlayerIntent::PreviousTrack),
+            KeyCode::Char(']') => c.dispatch(PlayerIntent::SkipAlbum),
             KeyCode::Char('e') => self.enqueue_selected(c, false),
             KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('N') => self.enqueue_selected(c, true),
@@ -1205,10 +1206,12 @@ impl App {
                 return e.tracks.get(e.selection).map(|t| t.id.clone());
             }
             // Album list level: resolve to first track of selected album.
-            return e
-                .albums
-                .get(e.selection)
-                .and_then(|a| c.store.album_tracks(&a.album).first().map(|t| t.id.clone()));
+            return e.albums.get(e.selection).and_then(|a| {
+                c.store
+                    .album_tracks(&a.artist, &a.album)
+                    .first()
+                    .map(|t| t.id.clone())
+            });
         }
         match self.tab {
             Tab::Tracks => self
@@ -1227,10 +1230,12 @@ impl App {
         .or_else(|| {
             // Albums/artists: resolve the first track of the selection.
             match self.tab {
-                Tab::Albums => self
-                    .albums
-                    .get(self.sel_albums)
-                    .and_then(|a| c.store.album_tracks(&a.album).first().map(|t| t.id.clone())),
+                Tab::Albums => self.albums.get(self.sel_albums).and_then(|a| {
+                    c.store
+                        .album_tracks(&a.artist, &a.album)
+                        .first()
+                        .map(|t| t.id.clone())
+                }),
                 Tab::Artists => self
                     .artists
                     .get(self.sel_artists)
@@ -1251,7 +1256,7 @@ impl App {
             } else {
                 // Album list level: play the selected album.
                 if let Some(a) = e.albums.get(e.selection).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     play_sequence(c, tracks);
                     self.status = format!("playing album: {}", a.album);
                 }
@@ -1297,7 +1302,7 @@ impl App {
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     play_sequence(c, tracks);
                     self.status = format!("playing album: {} - {}", a.artist, a.album);
                 }
@@ -1329,7 +1334,7 @@ impl App {
             } else {
                 // Album list level: enqueue the selected album.
                 if let Some(a) = e.albums.get(e.selection).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     enqueue_sequence(c, tracks, next);
                     self.status = if next { "album next" } else { "album queued" }.into();
                 }
@@ -1345,7 +1350,7 @@ impl App {
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     enqueue_sequence(c, tracks, next);
                     self.status = if next { "album next" } else { "album queued" }.into();
                 }
@@ -1618,7 +1623,7 @@ impl App {
             if e.kind == ExpandKind::Artist && !e.drilled {
                 // Album list -> drill into selected album's tracks.
                 if let Some(a) = e.albums.get(e.selection).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     e.tracks = tracks;
                     e.drilled = true;
                     e.selection = 0;
@@ -1639,7 +1644,7 @@ impl App {
         match self.tab {
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
-                    let tracks = c.store.album_tracks(&a.album);
+                    let tracks = c.store.album_tracks(&a.artist, &a.album);
                     let label = format!("{} - {}", a.artist, a.album);
                     self.expanded = Some(ExpandedView {
                         kind: ExpandKind::Album,

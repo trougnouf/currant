@@ -403,27 +403,29 @@ impl LibraryStore {
 
         // Pick a random album by name.
         let pick_sql = format!(
-            "SELECT album FROM tracks {where_sql} GROUP BY album ORDER BY RANDOM() LIMIT 1"
+            "SELECT album_artist, album FROM tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
         );
-        let album_name: Option<String> = if frag.where_clause.is_empty() {
-            conn.query_row(&pick_sql, [], |row| row.get(0)).ok()
+        let album_info: Option<(String, String)> = if frag.where_clause.is_empty() {
+            conn.query_row(&pick_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
+                .ok()
         } else {
             conn.query_row(
                 &pick_sql,
                 params_from_iter(params_as_dyn(&frag.params)),
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok()
         };
 
-        let Some(album) = album_name else {
+        let Some((album_artist, album)) = album_info else {
             return Vec::new();
         };
 
         // Get tracks from that album, also constrained by the filter so the
         // continuation never pulls in tracks the user filtered out.
-        let mut track_where = String::from("album = ?");
-        let mut track_params: Vec<SqlParam> = vec![SqlParam::Text(album)];
+        let mut track_where = String::from("album_artist = ? AND album = ?");
+        let mut track_params: Vec<SqlParam> =
+            vec![SqlParam::Text(album_artist), SqlParam::Text(album)];
         if !frag.where_clause.is_empty() {
             track_where.push_str(" AND (");
             track_where.push_str(&frag.where_clause);
@@ -456,15 +458,19 @@ impl LibraryStore {
     /// album the user started mid-way.
     pub fn album_tracks_after(
         &self,
+        album_artist: &str,
         album: &str,
         after: u32,
         expr: &matcher::SearchExpr,
     ) -> Vec<Track> {
         let frag = expr.to_sql();
         let conn = self.read_conn();
-        let mut where_clause = String::from("album = ? AND track_number > ?");
-        let mut params: Vec<SqlParam> =
-            vec![SqlParam::Text(album.into()), SqlParam::Int(after as i64)];
+        let mut where_clause = String::from("album_artist = ? AND album = ? AND track_number > ?");
+        let mut params: Vec<SqlParam> = vec![
+            SqlParam::Text(album_artist.into()),
+            SqlParam::Text(album.into()),
+            SqlParam::Int(after as i64),
+        ];
         if !frag.where_clause.is_empty() {
             where_clause.push_str(" AND (");
             where_clause.push_str(&frag.where_clause);
@@ -504,15 +510,11 @@ impl LibraryStore {
         let sql = format!(
             "SELECT * FROM (
                 SELECT
-                    CASE
-                        WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
-                        THEN MIN(album_artist)
-                        ELSE 'Various Artists'
-                    END AS artist,
+                    album_artist AS artist,
                     album, MAX(year) AS year, COUNT(*) AS track_count,
                     SUM(duration_secs) AS total
                  FROM tracks {where_sql}
-                 GROUP BY album
+                 GROUP BY album_artist, album
             ) ORDER BY fold(artist), fold(album)"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -554,9 +556,9 @@ impl LibraryStore {
         };
         let sql = format!(
             "SELECT * FROM (
-                SELECT artist, COUNT(DISTINCT album) AS album_count, COUNT(*) AS track_count
+                SELECT album_artist AS artist, COUNT(DISTINCT album) AS album_count, COUNT(*) AS track_count
                  FROM tracks {where_sql}
-                 GROUP BY artist
+                 GROUP BY album_artist
             ) ORDER BY fold(artist)"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -586,18 +588,18 @@ impl LibraryStore {
     }
 
     /// Tracks for a single album, in track order.
-    pub fn album_tracks(&self, album: &str) -> Vec<Track> {
+    pub fn album_tracks(&self, album_artist: &str, album: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime
-                   FROM tracks WHERE album = ?1
+                   FROM tracks WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         let mut out = Vec::new();
-        let rows = stmt.query(rusqlite::params![album]).unwrap();
+        let rows = stmt.query(rusqlite::params![album_artist, album]).unwrap();
         for t in rows.mapped(row_to_track).flatten() {
             out.push(t);
         }
@@ -627,15 +629,11 @@ impl LibraryStore {
     pub fn artist_albums(&self, artist: &str) -> Vec<Album> {
         let conn = self.read_conn();
         let sql = "SELECT
-                CASE
-                    WHEN COUNT(DISTINCT album_artist) = 1 AND MIN(album_artist) != ''
-                    THEN MIN(album_artist)
-                    ELSE 'Various Artists'
-                END AS artist,
+                album_artist AS artist,
                 album, MAX(year) AS year, COUNT(*) AS track_count,
                 SUM(duration_secs) AS total
-             FROM tracks WHERE artist = ?1
-             GROUP BY album
+             FROM tracks WHERE album_artist = ?1
+             GROUP BY album_artist, album
              ORDER BY MIN(album), album";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,

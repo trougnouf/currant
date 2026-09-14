@@ -245,6 +245,31 @@ impl PlayerController {
             PlayerIntent::PreviousTrack => {
                 self.previous_track();
             }
+            PlayerIntent::SkipAlbum => {
+                let cur_album = self.current_track_ref().map(|t| t.album);
+                if let Some(album) = cur_album {
+                    let mut drop_count = 0;
+                    for id in &self.explicit_queue {
+                        if self.store.get_track(id).map(|t| t.album) == Some(album.clone()) {
+                            drop_count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.explicit_queue.drain(0..drop_count);
+
+                    let mut drop_count = 0;
+                    for id in &self.dynamic_queue {
+                        if self.store.get_track(id).map(|t| t.album) == Some(album.clone()) {
+                            drop_count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.dynamic_queue.drain(0..drop_count);
+                }
+                self.dispatch(PlayerIntent::NextTrack);
+            }
             PlayerIntent::StopAfter { id } => {
                 // Empty id means "the current track" (CLI compat).
                 let target = if id.is_empty() {
@@ -342,6 +367,7 @@ impl PlayerController {
                     && let Some(cur) = self.store.get_track(cur_id)
                 {
                     let remaining = self.store.album_tracks_after(
+                        &cur.album_artist,
                         &cur.album,
                         cur.track_number,
                         &self.dynamic_query,
