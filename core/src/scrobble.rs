@@ -33,51 +33,69 @@ impl Scrobbler for NoopScrobbler {
 pub struct ListenbrainzScrobbler {
     api_root: String,
     token: String,
+    /// Shared HTTP agent with a bounded timeout, so a slow or unreachable
+    /// server can never hang a scrobble thread.
+    agent: ureq::Agent,
 }
 
 impl ListenbrainzScrobbler {
     pub fn new(token: String) -> Self {
-        Self {
-            api_root: "https://api.listenbrainz.org".to_string(),
-            token,
-        }
+        Self::with_api_root("https://api.listenbrainz.org".to_string(), token)
     }
 
     pub fn with_api_root(api_root: String, token: String) -> Self {
-        Self { api_root, token }
-    }
-
-    fn submit(&self, track: &Track, event: &ScrobbleEvent) {
-        let listen_type = match event {
-            ScrobbleEvent::NowPlaying => "playing_now",
-            ScrobbleEvent::Submitted => "single",
-        };
-        let payload = match event {
-            ScrobbleEvent::Submitted => serde_json::json!({
-                "listen_type": listen_type,
-                "payload": [{
-                    "listened_at": now_unix(),
-                    "track_metadata": track_metadata(track),
-                }],
-            }),
-            ScrobbleEvent::NowPlaying => serde_json::json!({
-                "listen_type": listen_type,
-                "payload": [{
-                    "track_metadata": track_metadata(track),
-                }],
-            }),
-        };
-        let url = format!("{}/1/submit-listens", self.api_root);
-        let _ = ureq::post(&url)
-            .header("Authorization", &format!("Token {}", self.token))
-            .send_json(&payload);
+        let agent = ureq::Agent::new_with_config(
+            ureq::config::Config::builder()
+                .timeout_global(Some(std::time::Duration::from_secs(10)))
+                .build(),
+        );
+        Self {
+            api_root,
+            token,
+            agent,
+        }
     }
 }
 
 impl Scrobbler for ListenbrainzScrobbler {
+    /// Fire-and-forget: the HTTP call runs on a short-lived thread so a slow
+    /// or unreachable server never blocks playback.
     fn report(&self, track: &Track, event: ScrobbleEvent) {
-        self.submit(track, &event);
+        let agent = self.agent.clone();
+        let api_root = self.api_root.clone();
+        let token = self.token.clone();
+        let track = track.clone();
+        std::thread::spawn(move || submit(&agent, &api_root, &token, &track, &event));
     }
+}
+
+/// POST one listen to the Listenbrainz API. Errors are ignored — scrobbling
+/// must never affect playback.
+fn submit(agent: &ureq::Agent, api_root: &str, token: &str, track: &Track, event: &ScrobbleEvent) {
+    let listen_type = match event {
+        ScrobbleEvent::NowPlaying => "playing_now",
+        ScrobbleEvent::Submitted => "single",
+    };
+    let payload = match event {
+        ScrobbleEvent::Submitted => serde_json::json!({
+            "listen_type": listen_type,
+            "payload": [{
+                "listened_at": now_unix(),
+                "track_metadata": track_metadata(track),
+            }],
+        }),
+        ScrobbleEvent::NowPlaying => serde_json::json!({
+            "listen_type": listen_type,
+            "payload": [{
+                "track_metadata": track_metadata(track),
+            }],
+        }),
+    };
+    let url = format!("{api_root}/1/submit-listens");
+    let _ = agent
+        .post(&url)
+        .header("Authorization", &format!("Token {token}"))
+        .send_json(&payload);
 }
 
 fn track_metadata(track: &Track) -> serde_json::Value {

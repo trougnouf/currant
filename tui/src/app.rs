@@ -7,7 +7,8 @@ use crate::audio::PlaybackState;
 use cassis_core::controller::PlayerController;
 use cassis_core::matcher::{self, parse_query};
 use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
-use cassis_core::scanner::ScanProgress;
+use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
+use cassis_core::scrobble::{ListenbrainzScrobbler, NoopScrobbler};
 use cassis_core::store::LibraryStore;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use std::sync::{Arc, MutexGuard};
@@ -110,6 +111,127 @@ pub enum ExpandKind {
     Artist,
 }
 
+/// One editable row in the settings pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    /// A configured scan root (index into `SettingsPane::roots`).
+    Root(usize),
+    /// The "+ add root" row.
+    AddRoot,
+    /// The Listenbrainz scrobble token.
+    Token,
+    /// The default volume (0-100).
+    Volume,
+}
+
+/// The settings overlay: scan roots, scrobble token, default volume.
+/// Opened with `o`; `Esc` saves and closes, `Enter` edits the selected row.
+#[derive(Debug)]
+pub struct SettingsPane {
+    pub roots: Vec<String>,
+    /// Roots as they were when the pane opened, to detect changes on save.
+    orig_roots: Vec<String>,
+    pub token: String,
+    pub volume: f32,
+    pub selected: usize,
+    pub editing: Option<SettingsField>,
+    pub edit_buf: String,
+}
+
+impl SettingsPane {
+    pub fn new(roots: Vec<String>, token: String, volume: f32) -> Self {
+        Self {
+            orig_roots: roots.clone(),
+            roots,
+            token,
+            volume,
+            selected: 0,
+            editing: None,
+            edit_buf: String::new(),
+        }
+    }
+
+    /// True if the roots differ from when the pane was opened.
+    pub fn roots_changed(&self) -> bool {
+        self.roots != self.orig_roots
+    }
+
+    /// Total number of rows: one per root, plus add-root, token, volume.
+    pub fn field_count(&self) -> usize {
+        self.roots.len() + 3
+    }
+
+    /// The field at row `i`, if any.
+    pub fn field_at(&self, i: usize) -> Option<SettingsField> {
+        match i {
+            i if i < self.roots.len() => Some(SettingsField::Root(i)),
+            i if i == self.roots.len() => Some(SettingsField::AddRoot),
+            i if i == self.roots.len() + 1 => Some(SettingsField::Token),
+            i if i == self.roots.len() + 2 => Some(SettingsField::Volume),
+            _ => None,
+        }
+    }
+
+    /// (label, value) text for a row, for rendering.
+    pub fn field_text(&self, field: &SettingsField) -> (&str, String) {
+        match field {
+            SettingsField::Root(i) => {
+                let path = self.roots.get(*i).cloned().unwrap_or_default();
+                ("scan root", path)
+            }
+            SettingsField::AddRoot => ("scan root", "+ add".to_string()),
+            SettingsField::Token => ("scrobble token", self.token.clone()),
+            SettingsField::Volume => (
+                "default volume",
+                format!("{:.0}%", (self.volume * 100.0).round()),
+            ),
+        }
+    }
+
+    /// Begin editing `field`, seeding the buffer with its current value.
+    pub fn begin_edit(&mut self, field: SettingsField) {
+        let seed = match field {
+            SettingsField::Root(i) => self.roots.get(i).cloned().unwrap_or_default(),
+            SettingsField::AddRoot => String::new(),
+            SettingsField::Token => self.token.clone(),
+            SettingsField::Volume => format!("{:.0}", (self.volume * 100.0).round()),
+        };
+        self.editing = Some(field);
+        self.edit_buf = seed;
+    }
+
+    /// Commit the edit buffer to the field being edited.
+    pub fn commit_edit(&mut self) {
+        match self.editing {
+            Some(SettingsField::Root(i)) => {
+                let buf = self.edit_buf.trim().to_string();
+                if buf.is_empty() {
+                    self.roots.remove(i);
+                } else {
+                    self.roots[i] = buf;
+                }
+            }
+            Some(SettingsField::AddRoot) => {
+                let buf = self.edit_buf.trim().to_string();
+                if !buf.is_empty() {
+                    self.roots.push(buf);
+                }
+            }
+            Some(SettingsField::Token) => self.token = self.edit_buf.trim().to_string(),
+            Some(SettingsField::Volume) => {
+                if let Ok(v) = self.edit_buf.trim().parse::<f32>() {
+                    self.volume = (v / 100.0).clamp(0.0, 1.0);
+                }
+            }
+            None => {}
+        }
+        self.editing = None;
+        self.edit_buf.clear();
+        // Keep the selection in range after a root is removed.
+        self.selected = self.selected.min(self.field_count().saturating_sub(1));
+    }
+}
+
 /// A windowed cache of tracks so 100k+ libraries stay smooth.
 struct WindowedView {
     offset: usize,
@@ -177,6 +299,7 @@ pub struct App {
     pub status: String,
     pub help: bool,
     pub details: Option<Track>,
+    pub settings: Option<SettingsPane>,
 
     tracks: WindowedView,
     files: WindowedView,
@@ -243,6 +366,7 @@ impl App {
             status: String::new(),
             help: false,
             details: None,
+            settings: None,
             tracks: WindowedView::new(),
             files: WindowedView::new(),
             albums: Vec::new(),
@@ -644,6 +768,16 @@ impl App {
             return false;
         }
 
+        // Settings pane: capture its own keys (Esc saves and closes).
+        if self.settings.is_some() {
+            // Ctrl+C still quits, so the pane can never trap the user.
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                return true;
+            }
+            self.handle_settings_key(key, c);
+            return false;
+        }
+
         // Search mode: capture printable input until Esc/Enter.
         if self.in_search {
             match key.code {
@@ -760,6 +894,7 @@ impl App {
             KeyCode::Char('R') => self.toggle_radio(c),
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Char('d') => self.show_details(c),
+            KeyCode::Char('o') => self.open_settings(c),
             KeyCode::Char('v') => self.toggle_expand(c),
             KeyCode::Char('P') => {
                 let name = if self.search.is_empty() {
@@ -812,6 +947,11 @@ impl App {
         size: Rect,
     ) -> bool {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        // Settings pane: keyboard-driven, ignore mouse.
+        if self.settings.is_some() {
+            return false;
+        }
 
         // Overlays: any left-click closes them (same as key behavior).
         if self.details.is_some() && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -1278,6 +1418,124 @@ impl App {
         }
     }
 
+    /// Open the settings pane, seeded from the store and current volume.
+    fn open_settings(&mut self, c: &MutexGuard<'_, PlayerController>) {
+        // Fall back to the default roots so the pane shows what is actually
+        // scanned when none have been saved yet.
+        let roots = c.store.load_roots();
+        let roots = if roots.is_empty() {
+            default_roots()
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect()
+        } else {
+            roots
+        };
+        let token = c.store.load_scrobble_token();
+        self.settings = Some(SettingsPane::new(roots, token, c.volume));
+        self.status = "settings: Esc saves & closes, Enter edits".into();
+    }
+
+    /// Handle a key while the settings pane is open.
+    fn handle_settings_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        c: &mut MutexGuard<'_, PlayerController>,
+    ) {
+        use crossterm::event::KeyCode;
+
+        // Editing mode: capture input into the buffer.
+        if self.settings.as_ref().is_some_and(|p| p.editing.is_some()) {
+            match key.code {
+                KeyCode::Esc => {
+                    if let Some(p) = self.settings.as_mut() {
+                        p.editing = None;
+                        p.edit_buf.clear();
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(p) = self.settings.as_mut() {
+                        p.commit_edit();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(p) = self.settings.as_mut() {
+                        p.edit_buf.pop();
+                    }
+                }
+                KeyCode::Char(ch) => {
+                    if let Some(p) = self.settings.as_mut() {
+                        p.edit_buf.push(ch);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // List mode: navigate and edit.
+        match key.code {
+            KeyCode::Esc => self.save_settings(c),
+            KeyCode::Up => {
+                if let Some(p) = self.settings.as_mut() {
+                    p.selected = p.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(p) = self.settings.as_mut() {
+                    p.selected = (p.selected + 1).min(p.field_count().saturating_sub(1));
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(p) = self.settings.as_mut()
+                    && let Some(field) = p.field_at(p.selected)
+                {
+                    p.begin_edit(field);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Persist the settings pane, apply the changes, and close it.
+    fn save_settings(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
+        let Some(pane) = self.settings.take() else {
+            return;
+        };
+        let roots_changed = pane.roots_changed();
+
+        if roots_changed {
+            c.store.save_roots(&pane.roots);
+        }
+        c.store.save_scrobble_token(&pane.token);
+        c.store.save_volume(pane.volume);
+
+        // Apply immediately: volume and scrobbler.
+        c.volume = pane.volume;
+        if pane.token.is_empty() {
+            c.set_scrobbler(Arc::new(NoopScrobbler));
+        } else {
+            c.set_scrobbler(Arc::new(ListenbrainzScrobbler::new(pane.token)));
+        }
+
+        // Rescan in the background if the roots changed.
+        if roots_changed {
+            self.spawn_scan(c.store.clone(), pane.roots.clone());
+            self.status = "settings saved, rescanning...".into();
+        } else {
+            self.status = "settings saved".into();
+        }
+    }
+
+    /// Spawn a background scan of `roots`, publishing live progress.
+    fn spawn_scan(&mut self, store: Arc<LibraryStore>, roots: Vec<String>) {
+        let progress = ScanProgress::new();
+        self.scan_progress = Some(progress.clone());
+        std::thread::spawn(move || {
+            scan_roots(&store, &roots, &progress);
+        });
+    }
+
     fn jump_to_playing(&mut self, store: &LibraryStore) {
         self.follow = true;
         let Some(np) = &self.now_playing else {
@@ -1714,5 +1972,98 @@ pub fn col_num(s: &str, width: usize) -> String {
         out
     } else {
         format!("{}{s}", " ".repeat(width - len))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pane() -> SettingsPane {
+        SettingsPane::new(
+            vec!["/music".to_string(), "/more".to_string()],
+            "token".to_string(),
+            0.8,
+        )
+    }
+
+    #[test]
+    fn field_layout() {
+        let p = pane();
+        // 2 roots + add + token + volume = 5 rows.
+        assert_eq!(p.field_count(), 5);
+        assert_eq!(p.field_at(0), Some(SettingsField::Root(0)));
+        assert_eq!(p.field_at(1), Some(SettingsField::Root(1)));
+        assert_eq!(p.field_at(2), Some(SettingsField::AddRoot));
+        assert_eq!(p.field_at(3), Some(SettingsField::Token));
+        assert_eq!(p.field_at(4), Some(SettingsField::Volume));
+        assert_eq!(p.field_at(5), None);
+    }
+
+    #[test]
+    fn edit_root_updates() {
+        let mut p = pane();
+        p.selected = 0;
+        p.begin_edit(SettingsField::Root(0));
+        p.edit_buf = "/new".to_string();
+        p.commit_edit();
+        assert_eq!(p.roots[0], "/new");
+        assert!(p.roots_changed());
+    }
+
+    #[test]
+    fn edit_root_empty_removes() {
+        let mut p = pane();
+        p.selected = 0;
+        p.begin_edit(SettingsField::Root(0));
+        p.edit_buf = "   ".to_string();
+        p.commit_edit();
+        assert_eq!(p.roots, vec!["/more".to_string()]);
+        // Selection clamped into range.
+        assert!(p.selected < p.field_count());
+    }
+
+    #[test]
+    fn add_root_appends() {
+        let mut p = pane();
+        p.selected = 2;
+        p.begin_edit(SettingsField::AddRoot);
+        p.edit_buf = "/extra".to_string();
+        p.commit_edit();
+        assert_eq!(p.roots.len(), 3);
+        assert_eq!(p.roots[2], "/extra");
+        assert!(p.roots_changed());
+    }
+
+    #[test]
+    fn add_root_empty_is_noop() {
+        let mut p = pane();
+        p.selected = 2;
+        p.begin_edit(SettingsField::AddRoot);
+        p.edit_buf = "".to_string();
+        p.commit_edit();
+        assert_eq!(p.roots.len(), 2);
+        assert!(!p.roots_changed());
+    }
+
+    #[test]
+    fn edit_token_and_volume() {
+        let mut p = pane();
+        p.selected = 3;
+        p.begin_edit(SettingsField::Token);
+        p.edit_buf = "  newtoken  ".to_string();
+        p.commit_edit();
+        assert_eq!(p.token, "newtoken");
+
+        p.selected = 4;
+        p.begin_edit(SettingsField::Volume);
+        p.edit_buf = "150".to_string(); // clamped to 100
+        p.commit_edit();
+        assert!((p.volume - 1.0).abs() < f32::EPSILON);
+
+        p.begin_edit(SettingsField::Volume);
+        p.edit_buf = "abc".to_string(); // invalid: unchanged
+        p.commit_edit();
+        assert!((p.volume - 1.0).abs() < f32::EPSILON);
     }
 }

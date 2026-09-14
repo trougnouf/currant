@@ -740,6 +740,16 @@ impl LibraryStore {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default()
     }
+
+    /// Persist the Listenbrainz scrobble token. An empty token disables
+    /// scrobbling.
+    pub fn save_scrobble_token(&self, token: &str) {
+        self.kv_set("scrobble_token", token);
+    }
+
+    pub fn load_scrobble_token(&self) -> String {
+        self.kv_get("scrobble_token").unwrap_or_default()
+    }
 }
 
 fn params_as_dyn(params: &[SqlParam]) -> Vec<&dyn rusqlite::ToSql> {
@@ -1008,6 +1018,20 @@ mod tests {
         let loaded = store.load_queue_snapshot().unwrap();
         assert_eq!(loaded.current_track.as_deref(), Some("1"));
         assert_eq!(loaded.dynamic_queue, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn scrobble_token_round_trip() {
+        let store = LibraryStore::open_memory().unwrap();
+        // No token set yet: empty (scrobbling disabled).
+        assert_eq!(store.load_scrobble_token(), "");
+        store.save_scrobble_token("abc123");
+        assert_eq!(store.load_scrobble_token(), "abc123");
+        // Overwrite, then clear.
+        store.save_scrobble_token("xyz789");
+        assert_eq!(store.load_scrobble_token(), "xyz789");
+        store.save_scrobble_token("");
+        assert_eq!(store.load_scrobble_token(), "");
     }
 
     #[test]

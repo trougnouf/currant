@@ -13,6 +13,7 @@ mod ui;
 use app::App;
 use cassis_core::controller::PlayerController;
 use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
+use cassis_core::scrobble::ListenbrainzScrobbler;
 use cassis_core::store::LibraryStore;
 use crossterm::{
     ExecutableCommand,
@@ -43,6 +44,12 @@ fn main() -> Result<(), io::Error> {
     }
     if let Some(v) = store.load_volume() {
         controller.volume = v;
+    }
+
+    // Wire the scrobbler if a token is configured (empty = disabled).
+    let token = store.load_scrobble_token();
+    if !token.is_empty() {
+        controller.set_scrobbler(Arc::new(ListenbrainzScrobbler::new(token)));
     }
 
     let roots = store.load_roots();

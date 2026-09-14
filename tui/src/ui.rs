@@ -4,8 +4,8 @@
 //! tabs, the active list and the now-playing bar.
 
 use crate::app::{
-    App, ColumnWidths, ExpandKind, QueueKind, Tab, ViewPreset, col_num, col_text, disp_width,
-    display_title, fmt_duration, render_rating, truncate,
+    App, ColumnWidths, ExpandKind, QueueKind, SettingsPane, Tab, ViewPreset, col_num, col_text,
+    disp_width, display_title, fmt_duration, render_rating, truncate,
 };
 use cassis_core::model::Track;
 use ratatui::Frame;
@@ -81,6 +81,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let area = centered(f.area(), 70, 60);
         f.render_widget(Clear, area);
         draw_details(f, area, track);
+    }
+    if let Some(pane) = &app.settings {
+        let area = centered(f.area(), 70, 60);
+        f.render_widget(Clear, area);
+        draw_settings(f, area, pane);
     }
 }
 
@@ -693,7 +698,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  e:queue  ?:help  q:quit  Ctrl+J:jump to playing";
+    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  +/-:vol  h/l:seek  v:expand  e:queue  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
             "Enter:play  e:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
@@ -718,7 +723,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::new();
-    let bindings: [(&str, &str); 25] = [
+    let bindings: [(&str, &str); 26] = [
         ("/search", "filter the current tab (Esc to leave)"),
         ("Tab / Shift+Tab", "switch tabs"),
         (
@@ -745,6 +750,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ("P", "save current search as a smart playlist"),
         ("g1-9", "activate saved playlist by index"),
         ("d", "show track details (path, metadata, etc.)"),
+        ("o", "open settings (scan roots, scrobble token, volume)"),
         ("Ctrl+J", "jump to currently playing track in the list"),
         ("q", "quit (Esc closes overlays)"),
     ];
@@ -866,4 +872,57 @@ fn draw_details(f: &mut Frame, area: Rect, track: &Track) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The settings overlay: a list of editable fields (scan roots, scrobble
+/// token, default volume). When a field is being edited, an input line shows
+/// the buffer being typed.
+fn draw_settings(f: &mut Frame, area: Rect, pane: &SettingsPane) {
+    let editing = pane.editing.is_some();
+    let mut constraints = vec![Constraint::Min(0)];
+    if editing {
+        constraints.push(Constraint::Length(3));
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let rows: Vec<ListItem> = (0..pane.field_count())
+        .map(|i| {
+            let field = pane.field_at(i).unwrap();
+            let (label, value) = pane.field_text(&field);
+            let line = Line::from(vec![
+                Span::styled(format!("{label:<16}"), Style::default().fg(theme::ACCENT)),
+                Span::styled(value, Style::default()),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(rows)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("settings (Esc: save & close, Enter: edit)")
+                .title_style(Style::default().fg(theme::TITLE))
+                .border_style(Style::default().fg(theme::POPUP_BORDER)),
+        )
+        .highlight_style(Style::default().bg(theme::ACCENT).fg(Color::Black))
+        .highlight_symbol(">> ");
+
+    let mut state = ListState::default();
+    state.select(Some(pane.selected));
+    f.render_stateful_widget(list, chunks[0], &mut state);
+
+    if editing {
+        let input = Paragraph::new(format!("{}|", pane.edit_buf)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("value (Enter: save, Esc: cancel)")
+                .title_style(Style::default().fg(theme::TITLE))
+                .border_style(Style::default().fg(theme::POPUP_BORDER)),
+        );
+        f.render_widget(input, chunks[1]);
+    }
 }

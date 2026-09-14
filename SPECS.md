@@ -62,7 +62,7 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 
 ### 2.3. Key/value store
 
-The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array).
+The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled).
 
 ---
 
@@ -137,7 +137,8 @@ All frontends fire `PlayerIntent` into the controller:
 *   `Scrobbler` trait: `report(track, event)`.
 *   Events: `NowPlaying` (on track start), `Submitted` (on track completion past threshold: half duration or 4 min, whichever is shorter).
 *   Listenbrainz is implemented (ureq HTTP). Last.fm is a future addition.
-*   Scrobbling never blocks playback; errors are ignored.
+*   Scrobbling never blocks playback; errors are ignored. Each report runs on a short-lived thread with a bounded HTTP timeout, so a slow or unreachable server cannot stall the audio thread.
+*   The Listenbrainz token is persisted in the `kv` store (`scrobble_token`). The TUI wires a `ListenbrainzScrobbler` on startup when the token is non-empty, and re-wires it live when the token is changed in the settings pane. An empty token disables scrobbling.
 
 ---
 
@@ -174,6 +175,7 @@ Metadata is read and written by lofty 0.25.
 | `N` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `d` | show track details (path, metadata, etc.) |
+| `o` | open the settings pane (scan roots, scrobble token, default volume) |
 | `v` | expand album/artist to browse tracks (albums/artists tab, `v` again to collapse) |
 | `Ctrl+J` | jump to the currently playing track in the current tab |
 | `S` | stop after selected track (queue tab) or current track (elsewhere) |
@@ -200,6 +202,14 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 *   **minimal** — artist, track number + title, duration
 *   **compact** — + album, rating
 *   **full** — + year, genre
+
+### 6.4. Settings pane
+
+Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the scrobble token, and the default volume. `Up`/`Down` move the selection; `Enter` edits the selected row (an input line appears); `Esc` cancels an edit, or — when not editing — saves and closes.
+
+*   **Scan roots** — the directories the scanner walks. Editing a root replaces it; an empty value removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
+*   **Scrobble token** — the Listenbrainz API token. Saving re-wires the scrobbler live (empty disables it).
+*   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
 
 ---
 
@@ -244,6 +254,5 @@ Not yet implemented, listed for priority tracking:
 *   Android app (Kotlin + Media3, uniffi bindings)
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
-*   Settings UI for scan roots, scrobble token, volume default
 *   Gapless playback
 *   ReplayGain
