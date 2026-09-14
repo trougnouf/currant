@@ -270,53 +270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cassis-core"
-version = "0.1.2"
-dependencies = [
- "dirs",
- "fastrand",
- "lofty",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "unicode-normalization",
- "uniffi",
- "ureq",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "cassis-ctl"
-version = "0.1.2"
-dependencies = [
- "cassis-core",
- "dirs",
- "serde_json",
-]
-
-[[package]]
-name = "cassis-tui"
-version = "0.1.2"
-dependencies = [
- "cassis-core",
- "crossterm",
- "dirs",
- "fastrand",
- "lofty",
- "notify",
- "ogg",
- "opus",
- "ratatui",
- "rodio",
- "serde",
- "serde_json",
- "souvlaki",
- "unicode-width",
-]
-
-[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -633,6 +586,53 @@ checksum = "eb2a7d3066da2de787b7f032c736763eb7ae5d355f81a68bab2675a96008b0bf"
 dependencies = [
  "lab",
  "phf",
+]
+
+[[package]]
+name = "currant-core"
+version = "0.1.2"
+dependencies = [
+ "dirs",
+ "fastrand",
+ "lofty",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "unicode-normalization",
+ "uniffi",
+ "ureq",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "currant-ctl"
+version = "0.1.2"
+dependencies = [
+ "currant-core",
+ "dirs",
+ "serde_json",
+]
+
+[[package]]
+name = "currant-tui"
+version = "0.1.2"
+dependencies = [
+ "crossterm",
+ "currant-core",
+ "dirs",
+ "fastrand",
+ "lofty",
+ "notify",
+ "ogg",
+ "opus",
+ "ratatui",
+ "rodio",
+ "serde",
+ "serde_json",
+ "souvlaki",
+ "unicode-width",
 ]
 
 [[package]]

@@ -1,12 +1,12 @@
 // ./ctl/src/main.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! `cassis-ctl` — remote control for a running Cassis instance.
+//! `currant-ctl` — remote control for a running Currant instance.
 //!
 //! Connects to the control socket exposed by the TUI, sends a `PlayerIntent`
 //! (or a status query), and prints the resulting playback state.
 
-use cassis_core::control::{ControlRequest, ControlResponse};
-use cassis_core::model::PlayerIntent;
+use currant_core::control::{ControlRequest, ControlResponse};
+use currant_core::model::PlayerIntent;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 fn socket_path() -> PathBuf {
     let dir = dirs::runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    dir.join("cassis.sock")
+    dir.join("currant.sock")
 }
 
 fn main() -> ExitCode {
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
             ExitCode::from(0)
         }
         Err(e) => {
-            eprintln!("cassis-ctl: {e}");
+            eprintln!("currant-ctl: {e}");
             eprintln!("is the TUI running?");
             ExitCode::from(1)
         }
@@ -139,7 +139,7 @@ fn format_duration(secs: u32) -> String {
 }
 
 fn print_usage() {
-    eprintln!("usage: cassis-ctl <command> [args]");
+    eprintln!("usage: currant-ctl <command> [args]");
     eprintln!();
     eprintln!("commands:");
     eprintln!("  play-pause          toggle playback");

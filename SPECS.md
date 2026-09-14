@@ -1,18 +1,18 @@
-# Cassis specifications
+# Currant specifications
 
-> This document is the source of truth for Cassis's behavior, data model, and architecture. Update it whenever introducing a new feature, syntax token, setting, or architectural shift. Keep it concise, behavioral, and accurate.
+> This document is the source of truth for Currant's behavior, data model, and architecture. Update it whenever introducing a new feature, syntax token, setting, or architectural shift. Keep it concise, behavioral, and accurate.
 
 ---
 
 ## 1. Architecture
 
-Cassis is a fast, offline-first music player with a Rust core and thin frontends (TUI now, Android later).
+Currant is a fast, offline-first music player with a Rust core and thin frontends (TUI now, Android later).
 
 ### 1.1. Crates
 
-*   **`cassis-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble, control protocol. No audio, no UI.
-*   **`cassis-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering. Exposes a control socket for `cassis-ctl`.
-*   **`cassis-ctl`** — remote control CLI. Connects to the TUI's control socket and dispatches `PlayerIntent`s or queries playback state.
+*   **`currant-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble, control protocol. No audio, no UI.
+*   **`currant-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering. Exposes a control socket for `currant-ctl`.
+*   **`currant-ctl`** — remote control CLI. Connects to the TUI's control socket and dispatches `PlayerIntent`s or queries playback state.
 *   **Android (future)** — Kotlin + Media3/ExoPlayer, bound to core via uniffi.
 
 ### 1.2. Data flow
@@ -22,7 +22,7 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 *   **Audio backend** — frontend-owned. The TUI spawns a thread that polls the controller's `current_track` and `is_playing` fields, decodes the file, and feeds rodio. When `current_track` is `None` and `is_playing` is true, the audio thread calls `determine_next_track()` to pull from the queue.
 *   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. Prunes removed files in a single transaction.
 *   **Directory watcher** — an optional background thread using `notify` monitors root directories for changes. Updates are debounced and fed into the incremental scanner, keeping the UI in sync without manual rescans.
-*   **Control socket & MPRIS** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/cassis.sock`, mode 0600) for `cassis-ctl`. Cassis also implements MPRIS (Linux), SMTC (Windows), and Media Remote (macOS) using `souvlaki` for OS desktop integration (lock screen, tray icon, media keys).
+*   **Control socket & MPRIS** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/currant.sock`, mode 0600) for `currant-ctl`. Currant also implements MPRIS (Linux), SMTC (Windows), and Media Remote (macOS) using `souvlaki` for OS desktop integration (lock screen, tray icon, media keys).
 
 ### 1.3. Performance
 
@@ -219,9 +219,9 @@ Opened with `o` as a centered overlay. It lists the editable settings as rows: o
 
 ---
 
-## 7. CLI (`cassis-ctl`)
+## 7. CLI (`currant-ctl`)
 
-Remote control for a running Cassis instance. Connects to the TUI's control socket, sends a `ControlRequest`, and prints the resulting playback state. Does not play audio itself — the TUI (or a future daemon) owns the audio backend.
+Remote control for a running Currant instance. Connects to the TUI's control socket, sends a `ControlRequest`, and prints the resulting playback state. Does not play audio itself — the TUI (or a future daemon) owns the audio backend.
 
 ### 7.1. Protocol
 
@@ -246,7 +246,7 @@ One JSON line per request, one JSON line per response. `ControlRequest` is tagge
 
 ### 7.3. Standalone daemon (future)
 
-A `cassis-daemon` process (like cfait's `cfait daemon`) would own the `PlayerController` + audio backend without a TUI, exposing the same control socket. The TUI would become a client of the daemon. This is deferred until headless playback is needed; the current in-TUI socket does not paint into a corner.
+A `currant-daemon` process (like cfait's `cfait daemon`) would own the `PlayerController` + audio backend without a TUI, exposing the same control socket. The TUI would become a client of the daemon. This is deferred until headless playback is needed; the current in-TUI socket does not paint into a corner.
 
 ### 7.4. Android
 

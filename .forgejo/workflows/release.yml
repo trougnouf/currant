@@ -41,14 +41,14 @@ jobs:
           mkdir -p dist
 
           # Source tarball
-          git archive --format=tar.gz --prefix="cassis-${CLEAN_VERSION}/" -o "dist/cassis-source-${RAW_VERSION}.tar.gz" HEAD
+          git archive --format=tar.gz --prefix="currant-${CLEAN_VERSION}/" -o "dist/currant-source-${RAW_VERSION}.tar.gz" HEAD
 
           # Linux binary tarball
-          mkdir "cassis-linux-${CLEAN_VERSION}"
-          cp target/release/cassis-tui "cassis-linux-${CLEAN_VERSION}/"
-          cp target/release/cassis-ctl "cassis-linux-${CLEAN_VERSION}/"
-          cp README.md "cassis-linux-${CLEAN_VERSION}/"
-          tar -cJvf "dist/cassis-linux-${RAW_VERSION}.tar.xz" "cassis-linux-${CLEAN_VERSION}"
+          mkdir "currant-linux-${CLEAN_VERSION}"
+          cp target/release/currant-tui "currant-linux-${CLEAN_VERSION}/"
+          cp target/release/currant-ctl "currant-linux-${CLEAN_VERSION}/"
+          cp README.md "currant-linux-${CLEAN_VERSION}/"
+          tar -cJvf "dist/currant-linux-${RAW_VERSION}.tar.xz" "currant-linux-${CLEAN_VERSION}"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v3
@@ -118,8 +118,8 @@ jobs:
             fi
           done
 
-      # --- AUR push (commented out: cassis package not created yet) ---
-      # - name: Push cassis to AUR
+      # --- AUR push (commented out: currant package not created yet) ---
+      # - name: Push currant to AUR
       #   if: startsWith(github.ref, 'refs/tags/')
       #   env:
       #     AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
@@ -130,11 +130,11 @@ jobs:
       #     ssh-keyscan aur.archlinux.org >> /root/.ssh/known_hosts
       #     export GIT_SSH_COMMAND="ssh -i /root/.ssh/aur_key -o UserKnownHostsFile=/root/.ssh/known_hosts"
       #
-      #     git config --global user.name "Cassis Bot (Benoit Brummer)"
+      #     git config --global user.name "Currant Bot (Benoit Brummer)"
       #     git config --global user.email "trougnouf@gmail.com"
       #
-      #     git clone ssh://aur@aur.archlinux.org/cassis.git aur-repo
-      #     cp packaging/arch/PKGBUILD-cassis aur-repo/PKGBUILD
+      #     git clone ssh://aur@aur.archlinux.org/currant.git aur-repo
+      #     cp packaging/arch/PKGBUILD-currant aur-repo/PKGBUILD
       #
       #     chown -R builder:builder aur-repo
       #     cd aur-repo

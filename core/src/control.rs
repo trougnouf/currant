@@ -1,6 +1,6 @@
 // ./core/src/control.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Wire protocol for remote control of a running cassis instance.
+//! Wire protocol for remote control of a running currant instance.
 //!
 //! A frontend that owns a `PlayerController` (the TUI today, a standalone
 //! daemon tomorrow) listens on a Unix domain socket. A CLI client connects,

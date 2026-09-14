@@ -1,13 +1,13 @@
 # ./ctl/Cargo.toml
 [package]
-name = "cassis-ctl"
+name = "currant-ctl"
 version = "0.1.2"
 edition = "2024"
-description = "Remote control CLI for a running Cassis instance."
+description = "Remote control CLI for a running Currant instance."
 license = "GPL-3.0-or-later"
 authors = ["Benoit Brummer (Trougnouf)"]
 
 [dependencies]
-cassis-core = { path = "../core" }
+currant-core = { path = "../core" }
 serde_json.workspace = true
 dirs = "7"

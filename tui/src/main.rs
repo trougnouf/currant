@@ -1,6 +1,6 @@
 // ./tui/src/main.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Cassis TUI entry point: opens the catalog, restores the live queue,
+//! Currant TUI entry point: opens the catalog, restores the live queue,
 //! scans the configured roots, spawns the audio backend and runs the loop.
 
 mod app;
@@ -11,16 +11,16 @@ mod opus;
 mod ui;
 
 use app::App;
-use cassis_core::controller::PlayerController;
-use cassis_core::model::PlayerIntent;
-use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
-use cassis_core::scrobble::ListenbrainzScrobbler;
-use cassis_core::store::LibraryStore;
 use crossterm::{
     ExecutableCommand,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use currant_core::controller::PlayerController;
+use currant_core::model::PlayerIntent;
+use currant_core::scanner::{ScanProgress, default_roots, scan_roots};
+use currant_core::scrobble::ListenbrainzScrobbler;
+use currant_core::store::LibraryStore;
 use notify::{RecursiveMode, Watcher};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use souvlaki::{
@@ -77,7 +77,7 @@ fn spawn_watcher(
 fn catalog_path() -> std::path::PathBuf {
     let dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("cassis");
+        .join("currant");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("library.db")
 }
@@ -170,8 +170,8 @@ fn run(
     // OS media integration (MPRIS on Linux, SMTC on Windows, Media Remote on
     // macOS). Events arrive on a channel and are dispatched in the loop.
     let mut controls = MediaControls::new(PlatformConfig {
-        dbus_name: "cassis",
-        display_name: "Cassis",
+        dbus_name: "currant",
+        display_name: "Currant",
         hwnd: None,
     })
     .ok();

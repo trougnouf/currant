@@ -1,11 +1,11 @@
-# cassis
+# currant
 
 Fast and powerful music player with a Rust core and thin frontends.
 
-The terminal frontend (`cassis-tui`) runs standalone — no server, no daemon.
-A control socket lets `cassis-ctl` drive playback from scripts or keybindings.
+The terminal frontend (`currant-tui`) runs standalone — no server, no daemon.
+A control socket lets `currant-ctl` drive playback from scripts or keybindings.
 
-![cassis-tui v0.0.1](https://commons.wikimedia.org/wiki/Special:FilePath/Cassis_music_player_v0.0.1_screenshot_(TUI).png)
+![currant-tui v0.0.1](https://commons.wikimedia.org/wiki/Special:FilePath/Currant_music_player_v0.0.1_screenshot_(TUI).png)
 
 ## Features
 
@@ -30,16 +30,16 @@ Opus playback depends on libopus and libogg being installed on the system.
 ## Usage
 
 ```
-cassis-tui            # launch the player
-cassis-ctl status     # query playback state
-cassis-ctl play-pause # toggle playback
+currant-tui            # launch the player
+currant-ctl status     # query playback state
+currant-ctl play-pause # toggle playback
 ```
 
 See `SPECS.md` for the full spec: query syntax, keybindings, queue model, data flow.
 
 ## Support
 
-If you enjoy using Cassis, consider supporting the developer:
+If you enjoy using Currant, consider supporting the developer:
 
 - **Liberapay:** [https://liberapay.com/trougnouf](https://liberapay.com/trougnouf)
 - **Ko-fi:** [https://ko-fi.com/trougnouf](https://ko-fi.com/trougnouf)

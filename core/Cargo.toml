@@ -1,9 +1,9 @@
 # ./core/Cargo.toml
 [package]
-name = "cassis-core"
+name = "currant-core"
 version = "0.1.2"
 edition = "2024"
-description = "Core library catalog, query engine and playback state for Cassis."
+description = "Core library catalog, query engine and playback state for Currant."
 license = "GPL-3.0-or-later"
 authors = ["Benoit Brummer (Trougnouf)"]
 

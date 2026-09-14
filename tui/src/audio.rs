@@ -4,8 +4,8 @@
 //! playback from the controller's live queue. Opus falls back to the bundled
 //! libopus decoder; everything else is decoded by symphonia via rodio.
 
-use cassis_core::controller::PlayerController;
-use cassis_core::model::PlayerIntent;
+use currant_core::controller::PlayerController;
+use currant_core::model::PlayerIntent;
 use lofty::file::TaggedFileExt;
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;

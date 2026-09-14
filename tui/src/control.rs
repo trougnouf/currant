@@ -1,11 +1,11 @@
 // ./tui/src/control.rs
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Unix domain socket server for remote control. Listens for `ControlRequest`
-//! JSON lines from `cassis-ctl` (or any client), dispatches them through the
+//! JSON lines from `currant-ctl` (or any client), dispatches them through the
 //! controller, and writes back a `ControlResponse` snapshot.
 
-use cassis_core::control::{ControlRequest, ControlResponse};
-use cassis_core::controller::PlayerController;
+use currant_core::control::{ControlRequest, ControlResponse};
+use currant_core::controller::PlayerController;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 /// Resolve the socket path. Prefers `$XDG_RUNTIME_DIR`, falls back to `/tmp`.
 pub fn socket_path() -> PathBuf {
     let dir = dirs::runtime_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    dir.join("cassis.sock")
+    dir.join("currant.sock")
 }
 
 /// Bind the socket, removing any stale leftover. Returns the listener or
@@ -35,7 +35,7 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) {
         let listener = match bind(&path) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("cassis: control socket failed at {}: {e}", path.display());
+                eprintln!("currant: control socket failed at {}: {e}", path.display());
                 return;
             }
         };

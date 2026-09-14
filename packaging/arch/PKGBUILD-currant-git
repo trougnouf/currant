@@ -1,11 +1,11 @@
 # Maintainer: Benoit Brummer (Trougnouf) <trougnouf@disroot.org>
-pkgname=cassis-git
-_pkgname=cassis
+pkgname=currant-git
+_pkgname=currant
 pkgver=41.b06a04c.0.1.1
 pkgrel=1
 pkgdesc="Fast and powerful music player with a Rust core and thin frontends (git version)"
 arch=('x86_64')
-url="https://git.disroot.org/trougnouf/cassis"
+url="https://git.disroot.org/trougnouf/currant"
 license=('GPL-3.0-or-later')
 depends=(
     'gcc-libs'
@@ -42,8 +42,8 @@ build() {
 package() {
   cd "$_pkgname"
 
-  install -Dm755 "target/release/cassis-tui" "$pkgdir/usr/bin/cassis-tui"
-  install -Dm755 "target/release/cassis-ctl" "$pkgdir/usr/bin/cassis-ctl"
+  install -Dm755 "target/release/currant-tui" "$pkgdir/usr/bin/currant-tui"
+  install -Dm755 "target/release/currant-ctl" "$pkgdir/usr/bin/currant-ctl"
 
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

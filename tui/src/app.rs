@@ -4,12 +4,12 @@
 //! and the key bindings that drive the controller.
 
 use crate::audio::PlaybackState;
-use cassis_core::controller::PlayerController;
-use cassis_core::matcher::{self, parse_query};
-use cassis_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
-use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
-use cassis_core::scrobble::{ListenbrainzScrobbler, NoopScrobbler};
-use cassis_core::store::LibraryStore;
+use currant_core::controller::PlayerController;
+use currant_core::matcher::{self, parse_query};
+use currant_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
+use currant_core::scanner::{ScanProgress, default_roots, scan_roots};
+use currant_core::scrobble::{ListenbrainzScrobbler, NoopScrobbler};
+use currant_core::store::LibraryStore;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};

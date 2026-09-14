@@ -59,12 +59,12 @@ jobs:
 
       - name: Create Linux tarball
         run: |
-          mkdir -p cassis-linux-rolling
-          cp target/release/cassis-tui cassis-linux-rolling/
-          cp target/release/cassis-ctl cassis-linux-rolling/
-          cp README.md cassis-linux-rolling/
+          mkdir -p currant-linux-rolling
+          cp target/release/currant-tui currant-linux-rolling/
+          cp target/release/currant-ctl currant-linux-rolling/
+          cp README.md currant-linux-rolling/
           mkdir -p dist-linux
-          tar -cJvf dist-linux/cassis-linux-rolling.tar.xz cassis-linux-rolling
+          tar -cJvf dist-linux/currant-linux-rolling.tar.xz currant-linux-rolling
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v3
@@ -100,7 +100,7 @@ jobs:
           REPO="${{ github.repository }}"
           TAG_NAME="rolling"
 
-          git config --global user.name "Cassis Bot"
+          git config --global user.name "Currant Bot"
           git config --global user.email "bot@trougnouf.com"
           git tag -f "$TAG_NAME"
           git push origin "$TAG_NAME" -f

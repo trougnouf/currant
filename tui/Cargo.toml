@@ -1,14 +1,14 @@
 # ./tui/Cargo.toml
 [package]
-name = "cassis-tui"
+name = "currant-tui"
 version = "0.1.2"
 edition = "2024"
-description = "Terminal music player for Cassis."
+description = "Terminal music player for Currant."
 license = "GPL-3.0-or-later"
 authors = ["Benoit Brummer (Trougnouf)"]
 
 [dependencies]
-cassis-core = { path = "../core" }
+currant-core = { path = "../core" }
 fastrand = "2.5"
 serde.workspace = true
 serde_json = "1"

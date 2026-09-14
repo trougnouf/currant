@@ -7,7 +7,7 @@ use crate::app::{
     App, ColumnWidths, ExpandKind, QueueKind, SettingsPane, Tab, ViewPreset, col_num, col_text,
     disp_width, display_title, fmt_duration, render_rating, truncate,
 };
-use cassis_core::model::Track;
+use currant_core::model::Track;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -48,10 +48,12 @@ use std::sync::OnceLock;
 fn display_name() -> &'static str {
     static NAME: OnceLock<&str> = OnceLock::new();
     NAME.get_or_init(|| {
-        if fastrand::bool() {
-            "Cassis"
-        } else {
+        if fastrand::u8(0..100) == 0 {
+            "Groseille"
+        } else if fastrand::bool() {
             "Currant"
+        } else {
+            "Cassis"
         }
     })
 }
@@ -661,8 +663,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let radio = app
         .radio_sort
         .map(|s| match s {
-            cassis_core::model::SortPreset::RandomAlbum => "random album",
-            cassis_core::model::SortPreset::Random => "random",
+            currant_core::model::SortPreset::RandomAlbum => "random album",
+            currant_core::model::SortPreset::Random => "random",
             _ => "off",
         })
         .unwrap_or("-");
@@ -806,7 +808,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         }
     }
     text.push_str(&format!(
-        "\nabout:\n  Cassis {}\n  by Benoit Brummer (Trougnouf)\n  GPL-3.0-or-later\n  Repository: https://git.disroot.org/trougnouf/cassis\n\n  support development:\n    Liberapay  https://liberapay.com/trougnouf\n    Ko-fi      https://ko-fi.com/trougnouf\n    Bank (SEPA)  BE77 9731 6116 6342\n    Bitcoin      bc1qc3z9ctv34v0ufxwpmq875r89umnt6ggeclp979\n    Litecoin     ltc1qv0xcmeuve080j7ad2cj2sd9d22kgqmlxfxvhmg\n    Ethereum     0x0A5281F3B6f609aeb9D71D7ED7acbEc5d00687CB\n",
+        "\nabout:\n  Currant {}\n  by Benoit Brummer (Trougnouf)\n  GPL-3.0-or-later\n  Repository: https://git.disroot.org/trougnouf/currant\n\n  support development:\n    Liberapay  https://liberapay.com/trougnouf\n    Ko-fi      https://ko-fi.com/trougnouf\n    Bank (SEPA)  BE77 9731 6116 6342\n    Bitcoin      bc1qc3z9ctv34v0ufxwpmq875r89umnt6ggeclp979\n    Litecoin     ltc1qv0xcmeuve080j7ad2cj2sd9d22kgqmlxfxvhmg\n    Ethereum     0x0A5281F3B6f609aeb9D71D7ED7acbEc5d00687CB\n",
         version()
     ));
 
