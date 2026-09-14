@@ -1021,6 +1021,8 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => self.seek_relative(c, 5),
             KeyCode::Char('H') => self.seek_relative(c, -30),
             KeyCode::Char('L') => self.seek_relative(c, 30),
+            KeyCode::Char('J') => self.move_playlist(c, false),
+            KeyCode::Char('K') => self.move_playlist(c, true),
             _ => {}
         }
         false
@@ -1468,6 +1470,28 @@ impl App {
         {
             c.dispatch(PlayerIntent::DeletePlaylist { id: pl.id });
             self.status = format!("deleted playlist: {}", pl.name);
+        }
+    }
+
+    fn move_playlist(&mut self, c: &mut MutexGuard<'_, PlayerController>, up: bool) {
+        if self.tab != Tab::Playlists {
+            return;
+        }
+        if let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned() {
+            c.dispatch(PlayerIntent::MovePlaylist {
+                id: pl.id.clone(),
+                up,
+            });
+            if up && self.sel_playlists > 0 {
+                self.sel_playlists -= 1;
+            } else if !up && self.sel_playlists + 1 < self.smart_playlists.len() {
+                self.sel_playlists += 1;
+            }
+            self.status = format!(
+                "moved playlist {}: {}",
+                if up { "up" } else { "down" },
+                pl.name
+            );
         }
     }
 

@@ -204,6 +204,7 @@ pub enum PlayerIntent {
     SavePlaylist { name: String },
     DeletePlaylist { id: String },
     ActivatePlaylist { id: String },
+    MovePlaylist { id: String, up: bool },
 
     // Library
     ScanLibrary { roots: Vec<String> },

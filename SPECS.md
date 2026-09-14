@@ -131,7 +131,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `SkipAlbum`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off. `SkipAlbum` drops contiguous tracks of the current album from the queues and skips.
 *   `SetVolume` — 0.0 to 1.0, persisted.
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
-*   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` — smart playlist management.
+*   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` / `MovePlaylist { id, up }` — smart playlist management. `MovePlaylist` reorders (swaps with neighbor), changing the `g1`-`g9` index mapping.
 *   `ScanLibrary` — set roots and trigger a scan.
 
 ### 4.4. Scrobbling
@@ -194,6 +194,7 @@ Metadata is read and written by lofty 0.25.
 | `H` `L` | seek backward / forward 30s |
 | `P` | save current search as a smart playlist |
 | `g1`-`g9` | activate saved playlist by index |
+| `J` `K` | move playlist down / up (playlists tab) |
 | `?` | help overlay (keybindings, search syntax, playlists, about/support) — scroll with j/k/arrows/PgUp/PgDn |
 | `q` / `Ctrl+C` | quit |
 | `Esc` | close help / details overlay, exit search mode |

@@ -331,6 +331,19 @@ impl PlayerController {
                     self.set_dynamic_source(expr, pl.sort_preset);
                 }
             }
+            PlayerIntent::MovePlaylist { id, up } => {
+                if let Some(i) = self.smart_playlists.iter().position(|p| p.id == id) {
+                    let j = if up {
+                        i.saturating_sub(1)
+                    } else {
+                        (i + 1).min(self.smart_playlists.len() - 1)
+                    };
+                    if i != j {
+                        self.smart_playlists.swap(i, j);
+                        self.store.save_smart_playlists(&self.smart_playlists);
+                    }
+                }
+            }
             PlayerIntent::ScanLibrary { roots } => {
                 self.store.save_roots(&roots);
                 let progress = crate::scanner::ScanProgress::default();

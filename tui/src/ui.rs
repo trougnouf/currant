@@ -720,7 +720,9 @@ fn tab_hint(tab: Tab) -> String {
             "Enter:play artist  v:expand  f:play-next  e:queue artist  d:details  c:view  s:sort  r:radio"
         }
         Tab::Queue => "Enter:jump to  x:remove  S:stop-after  d:details  c:view",
-        Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
+        Tab::Playlists => {
+            "Enter:activate  x:delete  J/K:reorder  P:save current search as playlist"
+        }
     };
     format!("{actions}{universal}")
 }
@@ -733,7 +735,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::new();
-    let bindings: [(&str, &str); 27] = [
+    let bindings: [(&str, &str); 28] = [
         ("/search", "filter the current tab (Esc to leave)"),
         ("Tab / Shift+Tab", "switch tabs"),
         (
@@ -760,6 +762,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         ("H L", "seek backward / forward 30s"),
         ("P", "save current search as a smart playlist"),
         ("g1-9", "activate saved playlist by index"),
+        ("J K", "move playlist down / up (playlists tab)"),
         ("d", "show track details (path, metadata, etc.)"),
         (
             "o",
