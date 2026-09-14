@@ -750,7 +750,10 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ("P", "save current search as a smart playlist"),
         ("g1-9", "activate saved playlist by index"),
         ("d", "show track details (path, metadata, etc.)"),
-        ("o", "open settings (scan roots, scrobble token, volume)"),
+        (
+            "o",
+            "open settings (scan roots, listenbrainz token, volume)",
+        ),
         ("Ctrl+J", "jump to currently playing track in the list"),
         ("q", "quit (Esc closes overlays)"),
     ];
@@ -893,7 +896,7 @@ fn draw_settings(f: &mut Frame, area: Rect, pane: &SettingsPane) {
             let field = pane.field_at(i).unwrap();
             let (label, value) = pane.field_text(&field);
             let line = Line::from(vec![
-                Span::styled(format!("{label:<16}"), Style::default().fg(theme::ACCENT)),
+                Span::styled(format!("{label:<20}"), Style::default().fg(theme::ACCENT)),
                 Span::styled(value, Style::default()),
             ]);
             ListItem::new(line)
@@ -904,7 +907,7 @@ fn draw_settings(f: &mut Frame, area: Rect, pane: &SettingsPane) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("settings (Esc: save & close, Enter: edit)")
+                .title("settings (Enter: edit  x: remove root  Esc: save & close)")
                 .title_style(Style::default().fg(theme::TITLE))
                 .border_style(Style::default().fg(theme::POPUP_BORDER)),
         )

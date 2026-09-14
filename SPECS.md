@@ -175,7 +175,7 @@ Metadata is read and written by lofty 0.25.
 | `N` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `d` | show track details (path, metadata, etc.) |
-| `o` | open the settings pane (scan roots, scrobble token, default volume) |
+| `o` | open the settings pane (scan roots, listenbrainz token, default volume) |
 | `v` | expand album/artist to browse tracks (albums/artists tab, `v` again to collapse) |
 | `Ctrl+J` | jump to the currently playing track in the current tab |
 | `S` | stop after selected track (queue tab) or current track (elsewhere) |
@@ -205,10 +205,10 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 
 ### 6.4. Settings pane
 
-Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the scrobble token, and the default volume. `Up`/`Down` move the selection; `Enter` edits the selected row (an input line appears); `Esc` cancels an edit, or — when not editing — saves and closes.
+Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, and the default volume. `Up`/`Down` move the selection; `Enter` edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
 
-*   **Scan roots** — the directories the scanner walks. Editing a root replaces it; an empty value removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
-*   **Scrobble token** — the Listenbrainz API token. Saving re-wires the scrobbler live (empty disables it).
+*   **Scan roots** — the directories the scanner walks. Editing a root replaces it; `x` (or an empty value) removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
+*   **Listenbrainz token** — the API token for scrobbling. Saving re-wires the scrobbler live (empty disables it).
 *   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
 
 ---

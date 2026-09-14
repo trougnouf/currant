@@ -180,7 +180,7 @@ impl SettingsPane {
                 ("scan root", path)
             }
             SettingsField::AddRoot => ("scan root", "+ add".to_string()),
-            SettingsField::Token => ("scrobble token", self.token.clone()),
+            SettingsField::Token => ("listenbrainz token", self.token.clone()),
             SettingsField::Volume => (
                 "default volume",
                 format!("{:.0}%", (self.volume * 100.0).round()),
@@ -229,6 +229,14 @@ impl SettingsPane {
         self.edit_buf.clear();
         // Keep the selection in range after a root is removed.
         self.selected = self.selected.min(self.field_count().saturating_sub(1));
+    }
+
+    /// Remove the root at `i`, keeping the selection in range.
+    pub fn remove_root(&mut self, i: usize) {
+        if i < self.roots.len() {
+            self.roots.remove(i);
+            self.selected = i.min(self.field_count().saturating_sub(1));
+        }
     }
 }
 
@@ -1493,6 +1501,14 @@ impl App {
                     p.begin_edit(field);
                 }
             }
+            // Remove the selected scan root (no-op on the other rows).
+            KeyCode::Char('x') => {
+                if let Some(p) = self.settings.as_mut()
+                    && let Some(SettingsField::Root(i)) = p.field_at(p.selected)
+                {
+                    p.remove_root(i);
+                }
+            }
             _ => {}
         }
     }
@@ -2033,6 +2049,22 @@ mod tests {
         assert_eq!(p.roots.len(), 3);
         assert_eq!(p.roots[2], "/extra");
         assert!(p.roots_changed());
+    }
+
+    #[test]
+    fn remove_root() {
+        let mut p = pane();
+        // Remove the first root; selection moves to the next row.
+        p.selected = 0;
+        p.remove_root(0);
+        assert_eq!(p.roots, vec!["/more".to_string()]);
+        assert_eq!(p.selected, 0);
+        assert!(p.roots_changed());
+        // Remove the last root; selection clamps to the final row.
+        p.selected = 0;
+        p.remove_root(0);
+        assert!(p.roots.is_empty());
+        assert!(p.selected < p.field_count());
     }
 
     #[test]
