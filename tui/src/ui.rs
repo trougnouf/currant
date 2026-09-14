@@ -768,12 +768,13 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     text.push_str("  click progress   seek\n");
     text.push_str("  shift+drag       terminal text selection (copy)\n");
     text.push_str("\nsearch syntax:\n");
-    let syntax: [(&str, &str); 12] = [
+    let syntax: [(&str, &str); 13] = [
         ("free text", "matches title, artist, album, comment"),
         ("ar:pink / artist:pink", "artist contains 'pink'"),
         ("al:=blue / album:=blue", "album equals exactly"),
         ("t:-love / title:-love", "title does not contain 'love'"),
         ("#jazz / genre:jazz", "genre contains 'jazz'"),
+        ("c:notes / comment:notes", "comment contains 'notes'"),
         ("year:>=1990", "year >= 1990"),
         ("*>=4 / rating:>=4", "rating >= 4 stars"),
         ("~>5m / length:>5m", "duration > 5 minutes"),
