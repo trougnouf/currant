@@ -914,10 +914,10 @@ impl App {
             KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
             KeyCode::Char('>') | KeyCode::Char('.') => c.dispatch(PlayerIntent::NextTrack),
             KeyCode::Char('<') | KeyCode::Char(',') => c.dispatch(PlayerIntent::PreviousTrack),
-            KeyCode::Char(']') => c.dispatch(PlayerIntent::SkipAlbum),
+            KeyCode::Char('N') => c.dispatch(PlayerIntent::SkipAlbum),
             KeyCode::Char('e') => self.enqueue_selected(c, false),
             KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
-            KeyCode::Char('N') => self.enqueue_selected(c, true),
+            KeyCode::Char('f') => self.enqueue_selected(c, true),
             KeyCode::Char('x') => self.remove_from_queue(c),
             KeyCode::Char('c') => {
                 self.view = match self.view {

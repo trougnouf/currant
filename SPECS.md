@@ -174,7 +174,7 @@ Metadata is read and written by lofty 0.25.
 | `Home` / `End` | first / last |
 | `Enter` | play selection (track, album, artist) / jump to queue row / activate playlist |
 | `e` | enqueue (append to queue) |
-| `N` | play next (front of queue) |
+| `f` | play next (front of queue) |
 | `x` | remove from queue (queue tab) / delete playlist (playlists tab) |
 | `d` | show track details (path, metadata, etc.) |
 | `o` | open the settings pane (scan roots, listenbrainz token, default volume) |
@@ -187,7 +187,7 @@ Metadata is read and written by lofty 0.25.
 | `r` `R` | toggle radio (random album / random / off) |
 | `p` | play / pause |
 | `n` `>` `.` | next track |
-| `]` | skip to the next album |
+| `N` | skip to the next album |
 | `<` `,` | previous track |
 | `+` `-` | volume up / down |
 | `Left` `Right` / `h` `l` | seek backward / forward 5s |

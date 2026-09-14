@@ -698,16 +698,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  ]:skip-album  +/-:vol  h/l:seek  v:expand  e:queue  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
+    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  N:skip-album  +/-:vol  h/l:seek  v:expand  f:play-next e:queue  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
-            "Enter:play  e:queue  N:play-next  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
+            "Enter:play  f:play-next  e:queue  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
         }
         Tab::Albums => {
-            "Enter:play album  v:expand  e:queue album  N:play-next  d:details  c:view  s:sort  r:radio"
+            "Enter:play album  v:expand  f:play-next  e:queue album  d:details  c:view  s:sort  r:radio"
         }
         Tab::Artists => {
-            "Enter:play artist  v:expand  e:queue artist  N:play-next  d:details  c:view  s:sort  r:radio"
+            "Enter:play artist  v:expand  f:play-next  e:queue artist  d:details  c:view  s:sort  r:radio"
         }
         Tab::Queue => "Enter:jump to  x:remove  S:stop-after  d:details  c:view",
         Tab::Playlists => "Enter:activate  x:delete  P:save current search as playlist",
@@ -734,7 +734,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ("Enter", "play / activate playlist (playlists tab)"),
         ("v", "expand album/artist (v again to collapse)"),
         ("e", "enqueue (append to queue)"),
-        ("N", "play next (front of queue)"),
+        ("f", "play next (front of queue)"),
         ("x", "remove from queue / delete playlist"),
         ("S", "stop after selected track (toggle)"),
         ("0-5", "rate track (0 clears)"),
@@ -743,7 +743,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         ("r / R", "toggle radio (random / random-album)"),
         ("p", "play / pause"),
         ("n > .", "next track"),
-        ("]", "skip album"),
+        ("N", "skip album"),
         ("< ,", "previous track"),
         ("+ -", "volume up / down"),
         ("</> (h/l)", "seek backward / forward 5s"),
