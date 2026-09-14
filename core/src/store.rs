@@ -727,6 +727,26 @@ impl LibraryStore {
         self.kv_get("volume").and_then(|v| v.parse().ok())
     }
 
+    pub fn save_replaygain(&self, enabled: bool) {
+        self.kv_set("replaygain", if enabled { "true" } else { "false" });
+    }
+
+    pub fn load_replaygain(&self) -> bool {
+        self.kv_get("replaygain")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+    }
+
+    pub fn save_watch_roots(&self, enabled: bool) {
+        self.kv_set("watch_roots", if enabled { "true" } else { "false" });
+    }
+
+    pub fn load_watch_roots(&self) -> bool {
+        self.kv_get("watch_roots")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+    }
+
     pub fn save_smart_playlists(&self, playlists: &[SmartPlaylist]) {
         if let Ok(json) = serde_json::to_string(playlists) {
             self.kv_set("smart_playlists", &json);

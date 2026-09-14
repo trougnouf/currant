@@ -21,6 +21,12 @@ unicode-width = "0.2"
 rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-ogg", "symphonia-wav"] }
 ogg = { version = "0.9", optional = true }
 opus = { version = "0.4", optional = true }
+# OS media integration (MPRIS on Linux, SMTC on Windows, Media Remote on macOS).
+souvlaki = "0.8"
+# Directory watching for the library roots (auto-rescan on file changes).
+notify = "8"
+# Read ReplayGain tags at playback time.
+lofty = "0.25"
 
 [features]
 default = ["opus"]

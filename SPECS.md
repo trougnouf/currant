@@ -21,7 +21,8 @@ Cassis is a fast, offline-first music player with a Rust core and thin frontends
 *   **PlayerController** — owns the live queue (in memory). Receives `PlayerIntent`s from frontends, applies state mutations, queries the store. Queue is snapshotted to the store on exit and restored on startup.
 *   **Audio backend** — frontend-owned. The TUI spawns a thread that polls the controller's `current_track` and `is_playing` fields, decodes the file, and feeds rodio. When `current_track` is `None` and `is_playing` is true, the audio thread calls `determine_next_track()` to pull from the queue.
 *   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. Prunes removed files in a single transaction.
-*   **Control socket** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/cassis.sock`, mode 0600). `cassis-ctl` connects, sends one `ControlRequest` (JSON line), and reads back one `ControlResponse` snapshot. Requests dispatch through the same `PlayerController::dispatch` path as key presses. The protocol types live in `cassis-core` so any future daemon or frontend can reuse them.
+*   **Directory watcher** — an optional background thread using `notify` monitors root directories for changes. Updates are debounced and fed into the incremental scanner, keeping the UI in sync without manual rescans.
+*   **Control socket & MPRIS** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/cassis.sock`, mode 0600) for `cassis-ctl`. Cassis also implements MPRIS (Linux), SMTC (Windows), and Media Remote (macOS) using `souvlaki` for OS desktop integration (lock screen, tray icon, media keys).
 
 ### 1.3. Performance
 
@@ -74,7 +75,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 
 | Syntax | Meaning |
 |---|---|
-| `free text` | title, artist, or album contains the text |
+| `free text` | title, artist, album, or comment contains the text |
 | `ar:text` / `artist:text` | artist contains text |
 | `al:text` / `album:text` | album contains text |
 | `t:text` / `title:text` | title contains text |
@@ -110,12 +111,13 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 *   **History** — capped at 200 tracks, for the "previous" button and de-duplication.
 *   **Radio** — toggled with `R`: random album → random → off. Default is random album. When off, playing a track from the filtered list enqueues the rest of that list in order; Next advances through it and stops at the end. When on (random or random album), the dynamic queue auto-refills from the filtered set.
 
-### 4.2. Position and seeking
+### 4.2. Position, seeking, and ReplayGain
 
 *   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics). The UI reads it each frame.
 *   Seeking is requested through the same `PlaybackState`: the UI sets a target in milliseconds, the audio thread calls `Player::try_seek` on the next loop iteration.
 *   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
 *   The now-playing bar shows `position / duration` and a progress bar (Gauge widget).
+*   ReplayGain is supported and applied at playback time. When enabled, it calculates a volume multiplier using `REPLAYGAIN_TRACK_GAIN` metadata tags extracted by lofty right before playback.
 
 ### 4.3. Intents
 
@@ -206,11 +208,13 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 
 ### 6.4. Settings pane
 
-Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, and the default volume. `Up`/`Down` move the selection; `Enter` edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
+Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, the default volume, and the replaygain and watch-roots toggles. `Up`/`Down` move the selection; `Enter` or `Space` toggles a bool row, or edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
 
 *   **Scan roots** — the directories the scanner walks. Editing a root replaces it; `x` (or an empty value) removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
 *   **Listenbrainz token** — the API token for scrobbling. Saving re-wires the scrobbler live (empty disables it).
 *   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
+*   **ReplayGain** — (default off) normalizes volume based on ReplayGain tags.
+*   **Watch roots** — (default off) monitors scan roots for file system changes and auto-rescans.
 
 ---
 
@@ -257,4 +261,3 @@ Not yet implemented, listed for priority tracking:
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Gapless playback
-*   ReplayGain

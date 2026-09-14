@@ -73,8 +73,9 @@ impl SearchExpr {
             SearchExpr::Str(field, op, val) => match field {
                 Field::All => {
                     frag.where_clause
-                        .push_str("(title_fold LIKE ? OR artist_fold LIKE ? OR album_fold LIKE ?)");
+                        .push_str("(title_fold LIKE ? OR artist_fold LIKE ? OR album_fold LIKE ? OR comment_fold LIKE ?)");
                     let p = format!("%{}%", text::fold(val));
+                    frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p));

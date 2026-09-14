@@ -31,7 +31,7 @@ pub struct Track {
 }
 
 /// A searchable library field. `All` is the free-text fallback that
-/// matches against title, artist and album together.
+/// matches against title, artist, album and comment together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Field {
     Title,

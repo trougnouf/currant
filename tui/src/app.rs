@@ -122,9 +122,13 @@ pub enum SettingsField {
     Token,
     /// The default volume (0-100).
     Volume,
+    /// Apply ReplayGain tags.
+    ReplayGain,
+    /// Watch roots for changes.
+    WatchRoots,
 }
 
-/// The settings overlay: scan roots, scrobble token, default volume.
+/// The settings overlay: scan roots, scrobble token, default volume, watch roots, and replaygain.
 /// Opened with `o`; `Esc` saves and closes, `Enter` edits the selected row.
 #[derive(Debug)]
 pub struct SettingsPane {
@@ -133,18 +137,28 @@ pub struct SettingsPane {
     orig_roots: Vec<String>,
     pub token: String,
     pub volume: f32,
+    pub replaygain: bool,
+    pub watch_roots: bool,
     pub selected: usize,
     pub editing: Option<SettingsField>,
     pub edit_buf: String,
 }
 
 impl SettingsPane {
-    pub fn new(roots: Vec<String>, token: String, volume: f32) -> Self {
+    pub fn new(
+        roots: Vec<String>,
+        token: String,
+        volume: f32,
+        replaygain: bool,
+        watch_roots: bool,
+    ) -> Self {
         Self {
             orig_roots: roots.clone(),
             roots,
             token,
             volume,
+            replaygain,
+            watch_roots,
             selected: 0,
             editing: None,
             edit_buf: String::new(),
@@ -156,9 +170,9 @@ impl SettingsPane {
         self.roots != self.orig_roots
     }
 
-    /// Total number of rows: one per root, plus add-root, token, volume.
+    /// Total number of rows: one per root, plus add-root, token, volume, replaygain, watch roots.
     pub fn field_count(&self) -> usize {
-        self.roots.len() + 3
+        self.roots.len() + 5
     }
 
     /// The field at row `i`, if any.
@@ -168,6 +182,8 @@ impl SettingsPane {
             i if i == self.roots.len() => Some(SettingsField::AddRoot),
             i if i == self.roots.len() + 1 => Some(SettingsField::Token),
             i if i == self.roots.len() + 2 => Some(SettingsField::Volume),
+            i if i == self.roots.len() + 3 => Some(SettingsField::ReplayGain),
+            i if i == self.roots.len() + 4 => Some(SettingsField::WatchRoots),
             _ => None,
         }
     }
@@ -185,6 +201,22 @@ impl SettingsPane {
                 "default volume",
                 format!("{:.0}%", (self.volume * 100.0).round()),
             ),
+            SettingsField::ReplayGain => (
+                "replaygain",
+                if self.replaygain {
+                    "enabled".into()
+                } else {
+                    "disabled".into()
+                },
+            ),
+            SettingsField::WatchRoots => (
+                "watch roots",
+                if self.watch_roots {
+                    "enabled".into()
+                } else {
+                    "disabled".into()
+                },
+            ),
         }
     }
 
@@ -195,6 +227,7 @@ impl SettingsPane {
             SettingsField::AddRoot => String::new(),
             SettingsField::Token => self.token.clone(),
             SettingsField::Volume => format!("{:.0}", (self.volume * 100.0).round()),
+            SettingsField::ReplayGain | SettingsField::WatchRoots => String::new(),
         };
         self.editing = Some(field);
         self.edit_buf = seed;
@@ -223,6 +256,8 @@ impl SettingsPane {
                     self.volume = (v / 100.0).clamp(0.0, 1.0);
                 }
             }
+            // Bool rows are toggled directly, never committed from the buffer.
+            Some(SettingsField::ReplayGain) | Some(SettingsField::WatchRoots) => {}
             None => {}
         }
         self.editing = None;
@@ -346,6 +381,9 @@ pub struct App {
     /// Live scan progress; `None` when no scan is running.
     scan_progress: Option<Arc<ScanProgress>>,
 
+    pub watcher_tx: Option<std::sync::mpsc::Sender<Vec<String>>>,
+    pub watcher_progress_rx: Option<std::sync::mpsc::Receiver<Arc<ScanProgress>>>,
+
     dirty: bool,
 
     /// ListState offset for the currently visible list (relative to the
@@ -405,6 +443,8 @@ impl App {
             col_scroll: (0, 0),
             col_last_scroll: Instant::now(),
             col_initialized: false,
+            watcher_tx: None,
+            watcher_progress_rx: None,
         }
     }
 
@@ -422,6 +462,12 @@ impl App {
 
     /// Rebuild caches and the view model from the controller. Called each frame.
     pub fn refresh(&mut self, c: &MutexGuard<'_, PlayerController>) {
+        if let Some(rx) = &self.watcher_progress_rx
+            && let Ok(p) = rx.try_recv()
+        {
+            self.scan_progress = Some(p);
+        }
+
         let expr = parse_query(&self.search);
         self.now_playing = c.current_track_ref();
         self.is_playing = c.is_playing;
@@ -1445,8 +1491,16 @@ impl App {
             roots
         };
         let token = c.store.load_scrobble_token();
-        self.settings = Some(SettingsPane::new(roots, token, c.volume));
-        self.status = "settings: Esc saves & closes, Enter edits".into();
+        let replaygain = c.store.load_replaygain();
+        let watch_roots = c.store.load_watch_roots();
+        self.settings = Some(SettingsPane::new(
+            roots,
+            token,
+            c.volume,
+            replaygain,
+            watch_roots,
+        ));
+        self.status = "settings: Esc saves & closes, Space/Enter toggles bools".into();
     }
 
     /// Handle a key while the settings pane is open.
@@ -1499,11 +1553,19 @@ impl App {
                     p.selected = (p.selected + 1).min(p.field_count().saturating_sub(1));
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char(' ') => {
                 if let Some(p) = self.settings.as_mut()
                     && let Some(field) = p.field_at(p.selected)
                 {
-                    p.begin_edit(field);
+                    match field {
+                        SettingsField::ReplayGain => p.replaygain = !p.replaygain,
+                        SettingsField::WatchRoots => p.watch_roots = !p.watch_roots,
+                        _ => {
+                            if key.code == KeyCode::Enter {
+                                p.begin_edit(field);
+                            }
+                        }
+                    }
                 }
             }
             // Remove the selected scan root (no-op on the other rows).
@@ -1530,9 +1592,21 @@ impl App {
         }
         c.store.save_scrobble_token(&pane.token);
         c.store.save_volume(pane.volume);
+        c.store.save_replaygain(pane.replaygain);
+        c.store.save_watch_roots(pane.watch_roots);
 
-        // Apply immediately: volume and scrobbler.
+        // Apply immediately: volume, replaygain and scrobbler.
         c.volume = pane.volume;
+        c.replaygain = pane.replaygain;
+
+        if let Some(tx) = &self.watcher_tx {
+            let _ = tx.send(if pane.watch_roots {
+                pane.roots.clone()
+            } else {
+                Vec::new()
+            });
+        }
+
         if pane.token.is_empty() {
             c.set_scrobbler(Arc::new(NoopScrobbler));
         } else {
@@ -2005,20 +2079,24 @@ mod tests {
             vec!["/music".to_string(), "/more".to_string()],
             "token".to_string(),
             0.8,
+            false,
+            false,
         )
     }
 
     #[test]
     fn field_layout() {
         let p = pane();
-        // 2 roots + add + token + volume = 5 rows.
-        assert_eq!(p.field_count(), 5);
+        // 2 roots + add + token + volume + replaygain + watch = 7 rows.
+        assert_eq!(p.field_count(), 7);
         assert_eq!(p.field_at(0), Some(SettingsField::Root(0)));
         assert_eq!(p.field_at(1), Some(SettingsField::Root(1)));
         assert_eq!(p.field_at(2), Some(SettingsField::AddRoot));
         assert_eq!(p.field_at(3), Some(SettingsField::Token));
         assert_eq!(p.field_at(4), Some(SettingsField::Volume));
-        assert_eq!(p.field_at(5), None);
+        assert_eq!(p.field_at(5), Some(SettingsField::ReplayGain));
+        assert_eq!(p.field_at(6), Some(SettingsField::WatchRoots));
+        assert_eq!(p.field_at(7), None);
     }
 
     #[test]

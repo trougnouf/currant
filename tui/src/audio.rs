@@ -6,6 +6,7 @@
 
 use cassis_core::controller::PlayerController;
 use cassis_core::model::PlayerIntent;
+use lofty::file::TaggedFileExt;
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
 use std::path::Path;
@@ -58,6 +59,34 @@ fn scrobble_threshold(duration_secs: u32) -> Duration {
     }
 }
 
+/// The ReplayGain multiplier for a track, read from its
+/// `REPLAYGAIN_TRACK_GAIN` tag. Returns 1.0 when the tag is missing or
+/// unparseable.
+fn track_gain_multiplier(path: &Path) -> f32 {
+    let tagged_file = match lofty::probe::Probe::open(path)
+        .ok()
+        .and_then(|p| p.read().ok())
+    {
+        Some(f) => f,
+        None => return 1.0,
+    };
+    let tag = match tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+    {
+        Some(t) => t,
+        None => return 1.0,
+    };
+    let db = match tag.get_string(lofty::tag::ItemKey::ReplayGainTrackGain) {
+        Some(s) => match s.replace(" dB", "").replace("dB", "").trim().parse::<f32>() {
+            Ok(v) => v,
+            Err(_) => return 1.0,
+        },
+        None => return 1.0,
+    };
+    10.0_f32.powf(db / 20.0).clamp(0.1, 10.0)
+}
+
 /// Open `path` as a rodio `Source`. Tries symphonia first, then the opus
 /// decoder when the `opus` feature is enabled.
 fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
@@ -99,14 +128,37 @@ pub fn spawn(
         let mut playing_id: Option<String> = None;
         let mut started_at = Instant::now();
         let mut threshold = Duration::from_secs(30);
+        let mut rg_key: (Option<String>, bool) = (None, false);
+        let mut current_rg_multiplier = 1.0_f32;
 
         loop {
-            let (is_playing, current, volume) = {
+            let (is_playing, current, volume, rg_enabled) = {
                 let c = controller.lock().unwrap();
-                (c.is_playing, c.current_track.clone(), c.volume)
+                (
+                    c.is_playing,
+                    c.current_track.clone(),
+                    c.volume,
+                    c.replaygain,
+                )
             };
 
-            player.set_volume(volume);
+            // Recompute the ReplayGain multiplier when the track or the
+            // setting changes (covers mid-track toggles).
+            let key = (current.clone(), rg_enabled);
+            if key != rg_key {
+                rg_key = key;
+                current_rg_multiplier = if rg_enabled {
+                    current
+                        .as_deref()
+                        .and_then(|id| controller.lock().unwrap().store.get_path(id))
+                        .map(|p| track_gain_multiplier(Path::new(&p)))
+                        .unwrap_or(1.0)
+                } else {
+                    1.0
+                };
+            }
+
+            player.set_volume(volume * current_rg_multiplier);
 
             // Publish the current playback position for the UI.
             state.set_position(player.get_pos().as_millis() as u64);

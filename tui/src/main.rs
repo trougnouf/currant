@@ -12,6 +12,7 @@ mod ui;
 
 use app::App;
 use cassis_core::controller::PlayerController;
+use cassis_core::model::PlayerIntent;
 use cassis_core::scanner::{ScanProgress, default_roots, scan_roots};
 use cassis_core::scrobble::ListenbrainzScrobbler;
 use cassis_core::store::LibraryStore;
@@ -20,10 +21,58 @@ use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use notify::{RecursiveMode, Watcher};
 use ratatui::{Terminal, backend::CrosstermBackend};
+use souvlaki::{
+    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+};
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Spawn a background thread that watches the scan roots and rescans when
+/// files change. `roots_rx` delivers the roots to watch (empty = disabled);
+/// `progress_tx` publishes the progress of each triggered rescan.
+fn spawn_watcher(
+    store: Arc<LibraryStore>,
+    roots_rx: std::sync::mpsc::Receiver<Vec<String>>,
+    progress_tx: std::sync::mpsc::Sender<Arc<ScanProgress>>,
+) {
+    std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(tx).ok();
+
+        let mut current_roots = Vec::new();
+        loop {
+            // Apply root changes (an empty list disables watching).
+            while let Ok(new_roots) = roots_rx.try_recv() {
+                if let Some(w) = &mut watcher {
+                    for root in &current_roots {
+                        let _ = w.unwatch(std::path::Path::new(root));
+                    }
+                    for root in &new_roots {
+                        let _ = w.watch(std::path::Path::new(root), RecursiveMode::Recursive);
+                    }
+                }
+                current_roots = new_roots;
+            }
+
+            // Wait for a file event, then debounce the burst before rescanning.
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(Ok(_)) => {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    while rx.try_recv().is_ok() {}
+                    let progress = ScanProgress::new();
+                    let _ = progress_tx.send(progress.clone());
+                    scan_roots(&store, &current_roots, &progress);
+                }
+                Ok(Err(_)) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+    });
+}
 
 fn catalog_path() -> std::path::PathBuf {
     let dir = dirs::data_local_dir()
@@ -73,12 +122,24 @@ fn main() -> Result<(), io::Error> {
         });
     }
 
+    // Directory watching: the watcher thread rescans when files change.
+    let (watcher_tx, watcher_rx) = std::sync::mpsc::channel();
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+    let _ = watcher_tx.send(if store.load_watch_roots() {
+        roots.clone()
+    } else {
+        Vec::new()
+    });
+    spawn_watcher(store.clone(), watcher_rx, progress_tx);
+
     let controller = Arc::new(Mutex::new(controller));
     let playback = Arc::new(audio::PlaybackState::new());
     crate::audio::spawn(controller.clone(), playback.clone());
     crate::control::spawn(controller.clone());
 
     let mut app = App::new();
+    app.watcher_tx = Some(watcher_tx);
+    app.watcher_progress_rx = Some(progress_rx);
     app.set_scan_progress(progress);
     app.set_playback(playback);
     app.status = "scanning...".into();
@@ -106,11 +167,89 @@ fn run(
     app: &mut App,
     controller: &Arc<Mutex<PlayerController>>,
 ) -> Result<(), io::Error> {
+    // OS media integration (MPRIS on Linux, SMTC on Windows, Media Remote on
+    // macOS). Events arrive on a channel and are dispatched in the loop.
+    let mut controls = MediaControls::new(PlatformConfig {
+        dbus_name: "cassis",
+        display_name: "Cassis",
+        hwnd: None,
+    })
+    .ok();
+    let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
+    if let Some(controls) = &mut controls {
+        let _ = controls.attach(move |e| {
+            let _ = mpris_tx.send(e);
+        });
+    }
+
+    let mut last_track_id: Option<String> = None;
+    let mut last_state = false;
+    let mut last_progress_update = Instant::now();
+
     loop {
         // Refresh the view model from the controller (brief lock).
         {
-            let c = controller.lock().unwrap();
+            let mut c = controller.lock().unwrap();
+
+            // Dispatch OS media events.
+            while let Ok(event) = mpris_rx.try_recv() {
+                match event {
+                    MediaControlEvent::Toggle => c.dispatch(PlayerIntent::TogglePlayPause),
+                    MediaControlEvent::Play if !c.is_playing => {
+                        c.dispatch(PlayerIntent::TogglePlayPause)
+                    }
+                    MediaControlEvent::Pause if c.is_playing => {
+                        c.dispatch(PlayerIntent::TogglePlayPause)
+                    }
+                    MediaControlEvent::Next => c.dispatch(PlayerIntent::NextTrack),
+                    MediaControlEvent::Previous => c.dispatch(PlayerIntent::PreviousTrack),
+                    MediaControlEvent::Stop => c.dispatch(PlayerIntent::ClearQueue),
+                    _ => {}
+                }
+            }
+
             app.refresh(&c);
+
+            if let Some(controls) = &mut controls {
+                let playing = c.is_playing;
+                let current_id = c.current_track.clone();
+
+                if current_id != last_track_id {
+                    if let Some(track) = c.current_track_ref() {
+                        controls
+                            .set_metadata(MediaMetadata {
+                                title: Some(track.title.as_str()),
+                                artist: Some(track.artist.as_str()),
+                                album: Some(track.album.as_str()),
+                                duration: Some(Duration::from_secs(track.duration_secs as u64)),
+                                ..Default::default()
+                            })
+                            .ok();
+                    } else {
+                        controls.set_metadata(MediaMetadata::default()).ok();
+                    }
+                    last_track_id = current_id;
+                }
+
+                let progress = Some(MediaPosition(Duration::from_millis(app.position_ms())));
+                if playing != last_state {
+                    controls
+                        .set_playback(if playing {
+                            MediaPlayback::Playing { progress }
+                        } else {
+                            MediaPlayback::Paused { progress }
+                        })
+                        .ok();
+                    last_state = playing;
+                    last_progress_update = Instant::now();
+                } else if playing && last_progress_update.elapsed() >= Duration::from_secs(1) {
+                    // Keep the desktop position bar moving while playing.
+                    controls
+                        .set_playback(MediaPlayback::Playing { progress })
+                        .ok();
+                    last_progress_update = Instant::now();
+                }
+            }
         }
 
         // Update column widths with debounce before rendering.

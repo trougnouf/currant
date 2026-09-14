@@ -769,7 +769,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     text.push_str("  shift+drag       terminal text selection (copy)\n");
     text.push_str("\nsearch syntax:\n");
     let syntax: [(&str, &str); 12] = [
-        ("free text", "matches title, artist, album"),
+        ("free text", "matches title, artist, album, comment"),
         ("ar:pink / artist:pink", "artist contains 'pink'"),
         ("al:=blue / album:=blue", "album equals exactly"),
         ("t:-love / title:-love", "title does not contain 'love'"),
@@ -908,7 +908,7 @@ fn draw_settings(f: &mut Frame, area: Rect, pane: &SettingsPane) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("settings (Enter: edit  x: remove root  Esc: save & close)")
+                .title("settings (Enter/Space: edit·toggle  x: remove root  Esc: save & close)")
                 .title_style(Style::default().fg(theme::TITLE))
                 .border_style(Style::default().fg(theme::POPUP_BORDER)),
         )

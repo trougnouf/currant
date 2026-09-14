@@ -27,6 +27,7 @@ pub struct PlayerController {
     pub stop_after: Option<String>,
     pub is_playing: bool,
     pub volume: f32,
+    pub replaygain: bool,
 
     /// The query + sort driving the dynamic queue (the active smart playlist).
     dynamic_query: SearchExpr,
@@ -40,6 +41,7 @@ pub struct PlayerController {
 impl PlayerController {
     pub fn new(store: Arc<LibraryStore>) -> Self {
         let smart_playlists = store.load_smart_playlists();
+        let replaygain = store.load_replaygain();
         Self {
             store,
             explicit_queue: Vec::new(),
@@ -49,6 +51,7 @@ impl PlayerController {
             stop_after: None,
             is_playing: false,
             volume: 1.0,
+            replaygain,
             dynamic_query: SearchExpr::Str(
                 crate::model::Field::All,
                 crate::model::CmpOp::Contains,
