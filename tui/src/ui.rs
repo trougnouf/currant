@@ -56,6 +56,16 @@ fn display_name() -> &'static str {
     })
 }
 
+/// Version string for the about section: crate version + short git hash.
+fn version() -> String {
+    let commit = env!("GIT_COMMIT_HASH");
+    if commit.is_empty() {
+        env!("CARGO_PKG_VERSION").to_string()
+    } else {
+        format!("{} ({})", env!("CARGO_PKG_VERSION"), commit)
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -715,7 +725,7 @@ fn tab_hint(tab: Tab) -> String {
     format!("{actions}{universal}")
 }
 
-fn draw_help(f: &mut Frame, area: Rect, app: &App) {
+fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("help")
@@ -792,7 +802,27 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             text.push_str(&format!("  g{}  {}  [{}]\n", i + 1, pl.name, pl.query));
         }
     }
-    let para = Paragraph::new(text).block(block);
+    text.push_str(&format!(
+        "\nabout:\n  Cassis {}\n  by Benoit Brummer (Trougnouf)\n  GPL-3.0-or-later\n  Repository: https://git.disroot.org/trougnouf/cassis\n\n  support development:\n    Liberapay  https://liberapay.com/trougnouf\n    Ko-fi      https://ko-fi.com/trougnouf\n    Bank (SEPA)  BE77 9731 6116 6342\n    Bitcoin      bc1qc3z9ctv34v0ufxwpmq875r89umnt6ggeclp979\n    Litecoin     ltc1qv0xcmeuve080j7ad2cj2sd9d22kgqmlxfxvhmg\n    Ethereum     0x0A5281F3B6f609aeb9D71D7ED7acbEc5d00687CB\n",
+        version()
+    ));
+
+    // Track content height for scroll clamping (accounts for line wrapping).
+    let inner = block.inner(area);
+    let inner_w = inner.width.max(1) as usize;
+    let wrapped: usize = text
+        .lines()
+        .map(|l| {
+            let len = l.chars().count();
+            if len == 0 { 1 } else { len.div_ceil(inner_w) }
+        })
+        .sum();
+    app.help_lines = wrapped;
+    app.help_height = inner.height;
+
+    let para = Paragraph::new(text)
+        .block(block)
+        .scroll((app.help_scroll, 0));
     f.render_widget(para, area);
 }
 

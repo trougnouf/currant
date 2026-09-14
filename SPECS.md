@@ -194,7 +194,7 @@ Metadata is read and written by lofty 0.25.
 | `H` `L` | seek backward / forward 30s |
 | `P` | save current search as a smart playlist |
 | `g1`-`g9` | activate saved playlist by index |
-| `?` | help overlay (search syntax + playlists) |
+| `?` | help overlay (keybindings, search syntax, playlists, about/support) — scroll with j/k/arrows/PgUp/PgDn |
 | `q` / `Ctrl+C` | quit |
 | `Esc` | close help / details overlay, exit search mode |
 

@@ -341,6 +341,9 @@ pub struct App {
     pub view: ViewPreset,
     pub status: String,
     pub help: bool,
+    pub help_scroll: u16,
+    pub help_lines: usize,
+    pub help_height: u16,
     pub details: Option<Track>,
     pub settings: Option<SettingsPane>,
 
@@ -411,6 +414,9 @@ impl App {
             view: ViewPreset::Compact,
             status: String::new(),
             help: false,
+            help_scroll: 0,
+            help_lines: 0,
+            help_height: 0,
             details: None,
             settings: None,
             tracks: WindowedView::new(),
@@ -851,6 +857,30 @@ impl App {
             return false;
         }
 
+        // Help overlay: scroll or close.
+        if self.help {
+            let max = self.help_lines.saturating_sub(self.help_height as usize) as u16;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.help = false,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_scroll = self.help_scroll.saturating_add(1).min(max);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(10).min(max);
+                }
+                KeyCode::PageUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(10);
+                }
+                KeyCode::Home => self.help_scroll = 0,
+                KeyCode::End => self.help_scroll = max,
+                _ => {}
+            }
+            return false;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => return true,
@@ -947,7 +977,10 @@ impl App {
             }
             KeyCode::Char('r') => self.toggle_radio(c),
             KeyCode::Char('R') => self.toggle_radio(c),
-            KeyCode::Char('?') => self.help = !self.help,
+            KeyCode::Char('?') => {
+                self.help = !self.help;
+                self.help_scroll = 0;
+            }
             KeyCode::Char('d') => self.show_details(c),
             KeyCode::Char('o') => self.open_settings(c),
             KeyCode::Char('v') => self.toggle_expand(c),
@@ -1013,8 +1046,18 @@ impl App {
             self.details = None;
             return false;
         }
-        if self.help && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            self.help = false;
+        if self.help {
+            let max = self.help_lines.saturating_sub(self.help_height as usize) as u16;
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => self.help = false,
+                MouseEventKind::ScrollDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(3).min(max);
+                }
+                MouseEventKind::ScrollUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(3);
+                }
+                _ => {}
+            }
             return false;
         }
 

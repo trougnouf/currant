@@ -5,6 +5,7 @@ version = "0.1.2"
 edition = "2024"
 description = "Core library catalog, query engine and playback state for Cassis."
 license = "GPL-3.0-or-later"
+authors = ["Benoit Brummer (Trougnouf)"]
 
 [dependencies]
 serde.workspace = true

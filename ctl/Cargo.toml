@@ -5,6 +5,7 @@ version = "0.1.2"
 edition = "2024"
 description = "Remote control CLI for a running Cassis instance."
 license = "GPL-3.0-or-later"
+authors = ["Benoit Brummer (Trougnouf)"]
 
 [dependencies]
 cassis-core = { path = "../core" }
