@@ -6,7 +6,7 @@
 
 ## 1. Architecture
 
-Currant is a fast, offline-first music player with a Rust core and thin frontends (TUI now, Android later).
+Currant is a fast offline music player with a Rust core and thin frontends (TUI now, Android later).
 
 ### 1.1. Crates
 

@@ -1,5 +1,4 @@
-Raspberry.svg:
-https://commons.wikimedia.org/wiki/File:Raspberry.svg
-Author: Kevin David Pointon alias Firkin
-License: CC0 1.0
-
+Logo derived from "Ribes nigrum Finland.jpg"
+https://commons.wikimedia.org/wiki/File:Ribes_nigrum_Finland.jpg
+Author: Tiia Monto (User:Kulmalukko)
+License: CC-BY-SA-4.0
