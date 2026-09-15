@@ -201,7 +201,7 @@ Metadata is read and written by lofty 0.25.
 
 ### 6.3. View presets
 
-Track rows use fixed-width columns so fields align vertically. Column widths are computed from the visible items: each field gets its natural max width when everything fits; on overflow, remaining space is distributed to flex fields by ratio (artist:album:title:genre = 3:3:3:1). Year and duration are fixed-width. Widths are debounced (1s) so columns stay stable while scrolling.
+Track rows use fixed-width columns so fields align vertically. Column widths are computed from the visible items: each field gets its natural max width when everything fits; on overflow, remaining space is distributed to flex fields by ratio (artist:album:title:genre = 3:3:3:1). Year and duration are fixed-width. Widths are debounced (1s) so columns stay stable while scrolling. Jumps (jump-to-playing, auto-jump on track change, skip album) adopt immediately since they reposition rather than scroll.
 
 *   **minimal** — artist, track number + title, duration
 *   **compact** — + album, rating

@@ -1704,6 +1704,9 @@ impl App {
             self.status = "nothing playing".into();
             return;
         };
+        // A jump is an abrupt reposition, not a scroll — adopt the new
+        // column widths immediately instead of waiting for the debounce.
+        self.col_initialized = false;
         let id = &np.id;
         match self.tab {
             Tab::Tracks | Tab::Files => {
