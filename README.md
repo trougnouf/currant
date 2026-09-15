@@ -5,7 +5,7 @@ Fast and powerful music player with a Rust core and thin frontends.
 The terminal frontend (`currant-tui`) runs standalone — no server, no daemon.
 A control socket lets `currant-ctl` drive playback from scripts or keybindings.
 
-![currant-tui v0.0.1](https://commons.wikimedia.org/wiki/Special:FilePath/Currant_music_player_v0.0.1_screenshot_(TUI).png)
+![currant-tui v0.0.1](https://commons.wikimedia.org/wiki/Special:FilePath/Currant_music_player_v0.1.1_screenshot_(TUI).png)
 
 ## Features
 
