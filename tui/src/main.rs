@@ -142,6 +142,7 @@ fn main() -> Result<(), io::Error> {
     app.watcher_progress_rx = Some(progress_rx);
     app.set_scan_progress(progress);
     app.set_playback(playback);
+    app.live_columns = store.load_live_columns();
     app.status = "scanning...".into();
 
     enable_raw_mode()?;

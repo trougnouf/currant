@@ -126,9 +126,11 @@ pub enum SettingsField {
     ReplayGain,
     /// Watch roots for changes.
     WatchRoots,
+    /// Update column widths live while scrolling (no debounce).
+    LiveColumns,
 }
 
-/// The settings overlay: scan roots, scrobble token, default volume, watch roots, and replaygain.
+/// The settings overlay: scan roots, scrobble token, default volume, watch roots, replaygain, and live columns.
 /// Opened with `o`; `Esc` saves and closes, `Enter` edits the selected row.
 #[derive(Debug)]
 pub struct SettingsPane {
@@ -139,6 +141,7 @@ pub struct SettingsPane {
     pub volume: f32,
     pub replaygain: bool,
     pub watch_roots: bool,
+    pub live_columns: bool,
     pub selected: usize,
     pub editing: Option<SettingsField>,
     pub edit_buf: String,
@@ -151,6 +154,7 @@ impl SettingsPane {
         volume: f32,
         replaygain: bool,
         watch_roots: bool,
+        live_columns: bool,
     ) -> Self {
         Self {
             orig_roots: roots.clone(),
@@ -159,6 +163,7 @@ impl SettingsPane {
             volume,
             replaygain,
             watch_roots,
+            live_columns,
             selected: 0,
             editing: None,
             edit_buf: String::new(),
@@ -170,9 +175,9 @@ impl SettingsPane {
         self.roots != self.orig_roots
     }
 
-    /// Total number of rows: one per root, plus add-root, token, volume, replaygain, watch roots.
+    /// Total number of rows: one per root, plus add-root, token, volume, replaygain, watch roots, live columns.
     pub fn field_count(&self) -> usize {
-        self.roots.len() + 5
+        self.roots.len() + 6
     }
 
     /// The field at row `i`, if any.
@@ -184,6 +189,7 @@ impl SettingsPane {
             i if i == self.roots.len() + 2 => Some(SettingsField::Volume),
             i if i == self.roots.len() + 3 => Some(SettingsField::ReplayGain),
             i if i == self.roots.len() + 4 => Some(SettingsField::WatchRoots),
+            i if i == self.roots.len() + 5 => Some(SettingsField::LiveColumns),
             _ => None,
         }
     }
@@ -217,6 +223,14 @@ impl SettingsPane {
                     "disabled".into()
                 },
             ),
+            SettingsField::LiveColumns => (
+                "live columns",
+                if self.live_columns {
+                    "enabled".into()
+                } else {
+                    "disabled".into()
+                },
+            ),
         }
     }
 
@@ -227,7 +241,9 @@ impl SettingsPane {
             SettingsField::AddRoot => String::new(),
             SettingsField::Token => self.token.clone(),
             SettingsField::Volume => format!("{:.0}", (self.volume * 100.0).round()),
-            SettingsField::ReplayGain | SettingsField::WatchRoots => String::new(),
+            SettingsField::ReplayGain | SettingsField::WatchRoots | SettingsField::LiveColumns => {
+                String::new()
+            }
         };
         self.editing = Some(field);
         self.edit_buf = seed;
@@ -257,7 +273,9 @@ impl SettingsPane {
                 }
             }
             // Bool rows are toggled directly, never committed from the buffer.
-            Some(SettingsField::ReplayGain) | Some(SettingsField::WatchRoots) => {}
+            Some(SettingsField::ReplayGain)
+            | Some(SettingsField::WatchRoots)
+            | Some(SettingsField::LiveColumns) => {}
             None => {}
         }
         self.editing = None;
@@ -402,6 +420,8 @@ pub struct App {
     col_scroll: ColScrollKey,
     col_last_scroll: Instant,
     col_initialized: bool,
+    /// When true, column widths update immediately on scroll (no debounce).
+    pub live_columns: bool,
 }
 
 impl App {
@@ -449,6 +469,7 @@ impl App {
             col_scroll: (0, 0),
             col_last_scroll: Instant::now(),
             col_initialized: false,
+            live_columns: false,
             watcher_tx: None,
             watcher_progress_rx: None,
         }
@@ -793,9 +814,13 @@ impl App {
                     self.col_widths = ideal;
                     self.col_initialized = true;
                 } else if scroll != self.col_scroll {
-                    // Scroll change — debounce.
+                    // Scroll change — debounce, or adopt immediately if live
+                    // columns are enabled.
                     self.col_scroll = scroll;
                     self.col_last_scroll = Instant::now();
+                    if self.live_columns {
+                        self.col_widths = ideal;
+                    }
                 } else if self.col_last_scroll.elapsed() >= DEBOUNCE {
                     self.col_widths = ideal;
                 }
@@ -1560,12 +1585,14 @@ impl App {
         let token = c.store.load_scrobble_token();
         let replaygain = c.store.load_replaygain();
         let watch_roots = c.store.load_watch_roots();
+        let live_columns = c.store.load_live_columns();
         self.settings = Some(SettingsPane::new(
             roots,
             token,
             c.volume,
             replaygain,
             watch_roots,
+            live_columns,
         ));
         self.status = "settings: Esc saves & closes, Space/Enter toggles bools".into();
     }
@@ -1627,6 +1654,7 @@ impl App {
                     match field {
                         SettingsField::ReplayGain => p.replaygain = !p.replaygain,
                         SettingsField::WatchRoots => p.watch_roots = !p.watch_roots,
+                        SettingsField::LiveColumns => p.live_columns = !p.live_columns,
                         _ => {
                             if key.code == KeyCode::Enter {
                                 p.begin_edit(field);
@@ -1661,10 +1689,12 @@ impl App {
         c.store.save_volume(pane.volume);
         c.store.save_replaygain(pane.replaygain);
         c.store.save_watch_roots(pane.watch_roots);
+        c.store.save_live_columns(pane.live_columns);
 
         // Apply immediately: volume, replaygain and scrobbler.
         c.volume = pane.volume;
         c.replaygain = pane.replaygain;
+        self.live_columns = pane.live_columns;
 
         if let Some(tx) = &self.watcher_tx {
             let _ = tx.send(if pane.watch_roots {
@@ -2151,14 +2181,15 @@ mod tests {
             0.8,
             false,
             false,
+            false,
         )
     }
 
     #[test]
     fn field_layout() {
         let p = pane();
-        // 2 roots + add + token + volume + replaygain + watch = 7 rows.
-        assert_eq!(p.field_count(), 7);
+        // 2 roots + add + token + volume + replaygain + watch + live = 8 rows.
+        assert_eq!(p.field_count(), 8);
         assert_eq!(p.field_at(0), Some(SettingsField::Root(0)));
         assert_eq!(p.field_at(1), Some(SettingsField::Root(1)));
         assert_eq!(p.field_at(2), Some(SettingsField::AddRoot));
@@ -2166,7 +2197,8 @@ mod tests {
         assert_eq!(p.field_at(4), Some(SettingsField::Volume));
         assert_eq!(p.field_at(5), Some(SettingsField::ReplayGain));
         assert_eq!(p.field_at(6), Some(SettingsField::WatchRoots));
-        assert_eq!(p.field_at(7), None);
+        assert_eq!(p.field_at(7), Some(SettingsField::LiveColumns));
+        assert_eq!(p.field_at(8), None);
     }
 
     #[test]

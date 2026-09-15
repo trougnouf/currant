@@ -747,6 +747,16 @@ impl LibraryStore {
             .unwrap_or(false)
     }
 
+    pub fn save_live_columns(&self, enabled: bool) {
+        self.kv_set("live_columns", if enabled { "true" } else { "false" });
+    }
+
+    pub fn load_live_columns(&self) -> bool {
+        self.kv_get("live_columns")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+    }
+
     pub fn save_smart_playlists(&self, playlists: &[SmartPlaylist]) {
         if let Ok(json) = serde_json::to_string(playlists) {
             self.kv_set("smart_playlists", &json);

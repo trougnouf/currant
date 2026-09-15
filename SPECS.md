@@ -201,7 +201,7 @@ Metadata is read and written by lofty 0.25.
 
 ### 6.3. View presets
 
-Track rows use fixed-width columns so fields align vertically. Column widths are computed from the visible items: each field gets its natural max width when everything fits; on overflow, remaining space is distributed to flex fields by ratio (artist:album:title:genre = 3:3:3:1). Year and duration are fixed-width. Widths are debounced (1s) so columns stay stable while scrolling. Jumps (jump-to-playing, auto-jump on track change, skip album) adopt immediately since they reposition rather than scroll.
+Track rows use fixed-width columns so fields align vertically. Column widths are computed from the visible items: each field gets its natural max width when everything fits; on overflow, remaining space is distributed to flex fields by ratio (artist:album:title:genre = 3:3:3:1). Year and duration are fixed-width. Widths are debounced (1s) so columns stay stable while scrolling. Jumps (jump-to-playing, auto-jump on track change, skip album) adopt immediately since they reposition rather than scroll. With the "live columns" setting enabled, the debounce is skipped entirely and widths follow the visible rows in real time.
 
 *   **minimal** — artist, track number + title, duration
 *   **compact** — + album, rating
@@ -209,13 +209,14 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 
 ### 6.4. Settings pane
 
-Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, the default volume, and the replaygain and watch-roots toggles. `Up`/`Down` move the selection; `Enter` or `Space` toggles a bool row, or edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
+Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, the default volume, and the replaygain, watch-roots, and live-columns toggles. `Up`/`Down` move the selection; `Enter` or `Space` toggles a bool row, or edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
 
 *   **Scan roots** — the directories the scanner walks. Editing a root replaces it; `x` (or an empty value) removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
 *   **Listenbrainz token** — the API token for scrobbling. Saving re-wires the scrobbler live (empty disables it).
 *   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
 *   **ReplayGain** — (default off) normalizes volume based on ReplayGain tags.
 *   **Watch roots** — (default off) monitors scan roots for file system changes and auto-rescans.
+*   **Live columns** — (default off) skips the column-width debounce so widths follow the visible rows in real time while scrolling.
 
 ---
 
