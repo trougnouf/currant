@@ -397,41 +397,44 @@ impl PlayerController {
                         cur.track_number,
                         &self.dynamic_query,
                     );
-                    let recent = self.recent_ids();
-                    let queue: Vec<String> = remaining
-                        .into_iter()
-                        .map(|t| t.id)
-                        .filter(|id| !recent.contains(id))
-                        .collect();
+                    let queue: Vec<String> = remaining.into_iter().map(|t| t.id).collect();
                     if !queue.is_empty() {
                         self.dynamic_queue = queue;
                         return;
                     }
                 }
 
-                let exclude = self
-                    .skip_album
+                let mut exclude_album = self.skip_album.clone();
+                if exclude_album.is_none()
+                    && let Some(cur_id) = cont_id
+                    && let Some(cur) = self.store.get_track(cur_id)
+                {
+                    exclude_album = Some((cur.album_artist, cur.album));
+                }
+                let exclude_ref = exclude_album
                     .as_ref()
                     .map(|(a, al)| (a.as_str(), al.as_str()));
-                let tracks = self.store.random_album_tracks(&self.dynamic_query, exclude);
-                let recent = self.recent_ids();
-                self.dynamic_queue = tracks
-                    .into_iter()
-                    .map(|t| t.id)
-                    .filter(|id| !recent.contains(id))
-                    .collect();
+                let tracks = self
+                    .store
+                    .random_album_tracks(&self.dynamic_query, exclude_ref);
+                self.dynamic_queue = tracks.into_iter().map(|t| t.id).collect();
             }
             SortPreset::Random => {
                 let page =
                     self.store
                         .filter(&self.dynamic_query, SortPreset::Random, DYNAMIC_BATCH, 0);
                 let recent = self.recent_ids();
-                self.dynamic_queue = page
+                let queue: Vec<String> = page
                     .tracks
-                    .into_iter()
-                    .map(|t| t.id)
+                    .iter()
+                    .map(|t| t.id.clone())
                     .filter(|id| !recent.contains(id))
                     .collect();
+                if queue.is_empty() && !page.tracks.is_empty() {
+                    self.dynamic_queue = page.tracks.into_iter().map(|t| t.id).collect();
+                } else {
+                    self.dynamic_queue = queue;
+                }
             }
             _ => {
                 // Ordered: no auto-refill. Playback stops when the explicit queue
