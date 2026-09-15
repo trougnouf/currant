@@ -35,7 +35,7 @@ currant-ctl status     # query playback state
 currant-ctl play-pause # toggle playback
 ```
 
-See `SPECS.md` for the full spec: query syntax, keybindings, queue model, data flow.
+Press `?` for built-in help. See `SPECS.md` for the full spec: query syntax, keybindings, queue model, data flow.
 
 ## Support
 
