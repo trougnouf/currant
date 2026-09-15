@@ -29,6 +29,10 @@ pub struct PlayerController {
     pub volume: f32,
     pub replaygain: bool,
 
+    /// When set, `repopulate_dynamic_queue` skips album continuation for this
+    /// (album_artist, album) pair. Set by `SkipAlbum`, cleared by `set_current`.
+    skip_album: Option<(String, String)>,
+
     /// The query + sort driving the dynamic queue (the active smart playlist).
     dynamic_query: SearchExpr,
     dynamic_sort: SortPreset,
@@ -52,6 +56,7 @@ impl PlayerController {
             is_playing: false,
             volume: 1.0,
             replaygain,
+            skip_album: None,
             dynamic_query: SearchExpr::Str(
                 crate::model::Field::All,
                 crate::model::CmpOp::Contains,
@@ -249,8 +254,9 @@ impl PlayerController {
                 self.previous_track();
             }
             PlayerIntent::SkipAlbum => {
-                let cur_album = self.current_track_ref().map(|t| t.album);
-                if let Some(album) = cur_album {
+                if let Some(cur) = self.current_track_ref() {
+                    self.skip_album = Some((cur.album_artist.clone(), cur.album.clone()));
+                    let album = cur.album;
                     let mut drop_count = 0;
                     for id in &self.explicit_queue {
                         if self.store.get_track(id).map(|t| t.album) == Some(album.clone()) {
@@ -361,6 +367,7 @@ impl PlayerController {
         }
         self.current_track = Some(id);
         self.is_playing = true;
+        self.skip_album = None;
     }
 
     fn recent_ids(&self) -> HashSet<String> {
@@ -378,9 +385,11 @@ impl PlayerController {
                 // to a random one, so playing a track mid-album plays the rest of it.
                 // After NextTrack, current_track is None but history.last() holds
                 // the track that just finished — use it to continue its album.
+                // SkipAlbum sets `skip_album` to suppress this continuation.
                 let cont_id = self.current_track.as_ref().or_else(|| self.history.last());
                 if let Some(cur_id) = cont_id
                     && let Some(cur) = self.store.get_track(cur_id)
+                    && self.skip_album != Some((cur.album_artist.clone(), cur.album.clone()))
                 {
                     let remaining = self.store.album_tracks_after(
                         &cur.album_artist,
@@ -659,5 +668,53 @@ mod tests {
             rating: 4,
         });
         assert_eq!(store.get_track("1").unwrap().rating, 4);
+    }
+
+    #[test]
+    fn skip_album_jumps_to_different_album() {
+        // Two albums: "x" (tracks 0-2) and "y" (tracks 3-5).
+        let store = Arc::new(LibraryStore::open_memory().unwrap());
+        for (id, album, tn) in [
+            (0, "x", 0),
+            (1, "x", 1),
+            (2, "x", 2),
+            (3, "y", 0),
+            (4, "y", 1),
+            (5, "y", 2),
+        ] {
+            store
+                .upsert_track(&Track {
+                    id: id.to_string(),
+                    path: format!("/m/{id}.mp3"),
+                    title: format!("song {id}"),
+                    artist: "pink".into(),
+                    album_artist: "pink".into(),
+                    album: album.into(),
+                    genre: "jazz".into(),
+                    comment: String::new(),
+                    track_number: tn,
+                    year: 2000,
+                    duration_secs: 100,
+                    rating: 0,
+                    play_count: 0,
+                    last_played: None,
+                    file_mtime: 0,
+                })
+                .unwrap();
+        }
+        let mut c = PlayerController::new(store);
+
+        // Play track 1 (album x) — continuation would normally play 2 next.
+        c.dispatch(PlayerIntent::PlayTrack { id: "1".into() });
+        assert_eq!(c.determine_next_track().as_deref(), Some("1"));
+
+        // Skip album: should NOT continue with track 2 (same album).
+        c.dispatch(PlayerIntent::SkipAlbum);
+        let next = c.determine_next_track();
+        assert_ne!(next.as_deref(), Some("2"));
+        // The next track must be from album y.
+        if let Some(id) = &next {
+            assert_eq!(c.store.get_track(id).unwrap().album, "y");
+        }
     }
 }
