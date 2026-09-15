@@ -409,7 +409,11 @@ impl PlayerController {
                     }
                 }
 
-                let tracks = self.store.random_album_tracks(&self.dynamic_query);
+                let exclude = self
+                    .skip_album
+                    .as_ref()
+                    .map(|(a, al)| (a.as_str(), al.as_str()));
+                let tracks = self.store.random_album_tracks(&self.dynamic_query, exclude);
                 let recent = self.recent_ids();
                 self.dynamic_queue = tracks
                     .into_iter()

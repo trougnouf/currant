@@ -392,26 +392,49 @@ impl LibraryStore {
     }
 
     /// Random album: pick one album, return its tracks in track order.
-    pub fn random_album_tracks(&self, expr: &matcher::SearchExpr) -> Vec<Track> {
+    pub fn random_album_tracks(
+        &self,
+        expr: &matcher::SearchExpr,
+        exclude: Option<(&str, &str)>,
+    ) -> Vec<Track> {
         let frag = expr.to_sql();
         let conn = self.read_conn();
+
+        // Build the album-pick query. An optional (album_artist, album) pair
+        // is excluded so e.g. SkipAlbum doesn't re-pick the album just skipped.
+        let mut exclude_clause = String::new();
+        let mut exclude_params: Vec<SqlParam> = Vec::new();
+        if let Some((ea, eal)) = exclude {
+            exclude_clause = " AND NOT (album_artist = ? AND album = ?)".to_string();
+            exclude_params = vec![
+                SqlParam::Text(ea.to_string()),
+                SqlParam::Text(eal.to_string()),
+            ];
+        }
+
         let where_sql = if frag.where_clause.is_empty() {
-            String::new()
+            if exclude_clause.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE 1=1{exclude_clause}")
+            }
         } else {
-            format!("WHERE {}", frag.where_clause)
+            format!("WHERE {}{exclude_clause}", frag.where_clause)
         };
 
         // Pick a random album by name.
         let pick_sql = format!(
             "SELECT album_artist, album FROM tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
         );
-        let album_info: Option<(String, String)> = if frag.where_clause.is_empty() {
+        let mut all_params: Vec<SqlParam> = frag.params.clone();
+        all_params.extend(exclude_params);
+        let album_info: Option<(String, String)> = if all_params.is_empty() {
             conn.query_row(&pick_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
                 .ok()
         } else {
             conn.query_row(
                 &pick_sql,
-                params_from_iter(params_as_dyn(&frag.params)),
+                params_from_iter(params_as_dyn(&all_params)),
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok()
@@ -977,7 +1000,7 @@ mod tests {
         let artists = store.artists(&parse_query(""));
         assert_eq!(artists.len(), 2);
 
-        let ra = store.random_album_tracks(&parse_query(""));
+        let ra = store.random_album_tracks(&parse_query(""), None);
         assert!(!ra.is_empty());
     }
 
