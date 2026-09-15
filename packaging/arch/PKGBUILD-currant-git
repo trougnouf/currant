@@ -1,7 +1,7 @@
 # Maintainer: Benoit Brummer (Trougnouf) <trougnouf@disroot.org>
 pkgname=currant-git
 _pkgname=currant
-pkgver=41.b06a04c.0.1.1
+pkgver=57.abce92e.rolling
 pkgrel=1
 pkgdesc="Fast and powerful music player with a Rust core and thin frontends (git version)"
 arch=('x86_64')
