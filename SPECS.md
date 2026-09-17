@@ -253,7 +253,6 @@ A `currant-daemon` process (like cfait's `cfait daemon`) would own the `PlayerCo
 
 Android does not use the control socket. The app owns `PlayerController` in-process (via uniffi) and exposes remote control through Android's MediaSession API (notification, lock screen, Bluetooth, `adb shell`).
 
----
 
 ## 8. Future work
 
@@ -263,3 +262,25 @@ Not yet implemented, listed for priority tracking:
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Gapless playback
+
+## 9. Networking & Remote Control
+
+Currant instances seamlessly connect, share libraries, and control each other over a local network. All networking is unified under a single HTTP server port with a WebSocket upgrade for bidirectional control, ensuring firewall traversal and discovery (mDNS) are trivial. 
+
+### 9.1. Unified Protocol (HTTP & WebSockets)
+*   **Single Port:** A single bounded HTTP server (`tiny_http`) handles media streaming and delta syncs. 
+*   **WebSocket Control:** Clients upgrade a `GET /ws` endpoint into a persistent WebSocket connection using `tungstenite`. This handles the bidirectional flow of `PlayerIntent` and `ControlResponse` payloads seamlessly without raw TCP framing issues.
+*   **Authentication:** Clients connect via a 128-bit Token. The host TUI renders a QR code for seamless Android pairing.
+
+### 9.2. Shared Queue & Control
+*   **State Sync:** The host pushes a `ControlResponse` JSON payload over the WebSocket whenever the `PlayerController` state changes.
+*   **Intent Forwarding:** Clients send `PlayerIntent` payloads over the WebSocket. The host applies them to its controller, triggering an immediate broadcast so all UIs stay perfectly in sync.
+
+### 9.3. Remote Library Access (Relative Paths & Delta Sync)
+*   **Deterministic IDs:** To support libraries synchronized across devices (e.g., via Syncthing), `Track.id` is hashed from the track's **relative path**, not its absolute path.
+*   **Zero-Latency UI:** Clients maintain a local SQLite replica. UI queries are instantaneous and execute against the local Rust core.
+*   **Timestamp Delta Sync:** The host's `tracks` table includes an `updated_at` timestamp, and a `tombstones` table tracks deletions `(id, deleted_at)`. On connect, clients request `GET /sync?since=TIMESTAMP`. The host returns a JSON payload of `{ updated: [Track], deleted: [String] }` which the client merges, perfectly reconciling offline listens, play counts, and removed files using mere kilobytes.
+
+### 9.4. Audio Streaming & Casting (Pull-Based)
+*   **Remote Library, Local Speaker:** The host serves audio via `GET /stream/:id`. The client core intercepts file paths and wraps them in an `HttpSeekableReader` (translating `seek()` to HTTP `Range` requests), allowing decoders (`symphonia`) to natively read headers and seek seamlessly.
+*   **Local Library, Remote Speaker (Casting):** Because push-based chunked streaming breaks decoders that need to seek/read file headers, casting is pull-based. The Android app spins up a lightweight `tiny_http` server in its Foreground Service and sends a `PlayerIntent::PlayStream { url }` intent. The host fetches and decodes it identically to remote playback.
