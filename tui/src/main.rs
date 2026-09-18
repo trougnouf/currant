@@ -151,6 +151,7 @@ fn main() -> Result<(), io::Error> {
     app.watcher_tx = Some(watcher_tx);
     app.network_state = Some(network_state);
     app.zone_tx = Some(zone_tx);
+    app.remote_state = Some(remote_state);
     app.watcher_progress_rx = Some(progress_rx);
     app.set_scan_progress(progress);
     app.set_playback(playback);

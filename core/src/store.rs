@@ -115,6 +115,37 @@ impl LibraryStore {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+
+        // Simple wipe on breaking schema updates to guarantee deduplication correctness.
+        // It keeps the `kv` table untouched so user settings aren't lost.
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);")?;
+        let db_version: i64 = conn
+            .query_row(
+                "SELECT value FROM kv WHERE key = 'schema_version'",
+                [],
+                |r| {
+                    let val: String = r.get(0)?;
+                    val.parse()
+                        .map_err(|_| rusqlite::Error::ExecuteReturnedResults)
+                },
+            )
+            .unwrap_or(0);
+
+        if db_version < 2 {
+            conn.execute_batch(
+                "
+                DROP TABLE IF EXISTS tracks;
+                DROP TABLE IF EXISTS track_sources;
+                DROP TABLE IF EXISTS tombstones;
+                DROP VIEW IF EXISTS tracks_with_local;
+            ",
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO kv (key, value) VALUES ('schema_version', '2')",
+                [],
+            )?;
+        }
+
         conn.execute_batch(SCHEMA)?;
         register_fold(&conn)?;
         migrate(&conn);

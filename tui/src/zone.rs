@@ -17,7 +17,7 @@ pub enum ZoneCommand {
 
 pub fn spawn(rx: Receiver<ZoneCommand>, remote_state: Arc<Mutex<Option<ControlResponse>>>) {
     std::thread::spawn(move || {
-        let mut current_peer: Option<(String, u16)> = None;
+        let mut current_peer: Option<(String, u16)>;
         let mut socket: Option<tungstenite::WebSocket<TcpStream>> = None;
 
         loop {

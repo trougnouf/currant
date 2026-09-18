@@ -411,6 +411,9 @@ pub struct App {
     /// switch the active zone or forward intents to a remote Playback Target.
     pub zone_tx: Option<std::sync::mpsc::Sender<crate::zone::ZoneCommand>>,
 
+    pub active_zone: Option<String>,
+    pub remote_state: Option<Arc<std::sync::Mutex<Option<currant_core::control::ControlResponse>>>>,
+
     dirty: bool,
 
     /// ListState offset for the currently visible list (relative to the
@@ -480,6 +483,8 @@ impl App {
             watcher_progress_rx: None,
             network_state: None,
             zone_tx: None,
+            active_zone: None,
+            remote_state: None,
         }
     }
 
@@ -504,12 +509,34 @@ impl App {
         }
 
         let expr = parse_query(&self.search);
-        self.now_playing = c.current_track_ref();
-        self.is_playing = c.is_playing;
-        self.stop_after = c.stop_after.clone();
+        let mut using_remote = false;
+        if self.active_zone.is_some()
+            && let Some(rs_arc) = &self.remote_state
+        {
+            // Clone the snapshot out of the mutex so the guard is
+            // dropped before we touch `self` mutably below.
+            let rs = rs_arc.lock().ok().and_then(|g| g.as_ref().cloned());
+            if let Some(rs) = rs {
+                self.now_playing = rs.current_track.clone();
+                self.is_playing = rs.is_playing;
+                self.volume = rs.volume;
+                self.stop_after = None;
+                self.refresh_queue_from_snapshot(&rs.queue, &c.store);
+                using_remote = true;
+            }
+        }
+
+        if !using_remote {
+            self.now_playing = c.current_track_ref();
+            self.is_playing = c.is_playing;
+            self.stop_after = c.stop_after.clone();
+            self.volume = c.volume;
+            let snap = c.queue_snapshot();
+            self.refresh_queue_from_snapshot(&snap, &c.store);
+        }
+
         self.track_count = c.store.track_count();
         self.radio_sort = Some(c.dynamic_sort());
-        self.volume = c.volume;
         self.smart_playlists = c.smart_playlists().to_vec();
 
         // Auto-jump to the playing track when it changes (next/prev/skip).
@@ -551,7 +578,7 @@ impl App {
             Tab::Files => self.refresh_files(&c.store, &expr),
             Tab::Albums => self.refresh_albums(&c.store, &expr),
             Tab::Artists => self.refresh_artists(&c.store, &expr),
-            Tab::Queue => self.refresh_queue(c),
+            Tab::Queue => {} // Queues are handled globally via snapshot above
             Tab::Playlists => self.refresh_playlists(),
         }
         // Collapse expanded view if the underlying album/artist list was
@@ -592,9 +619,11 @@ impl App {
         }
     }
 
-    fn refresh_queue(&mut self, c: &MutexGuard<'_, PlayerController>) {
-        let snap = c.queue_snapshot();
-        let store = &c.store;
+    fn refresh_queue_from_snapshot(
+        &mut self,
+        snap: &currant_core::model::QueueSnapshot,
+        store: &LibraryStore,
+    ) {
         let mut rows = Vec::new();
         if let Some(id) = &snap.current_track
             && let Some(t) = store.get_track(id)
@@ -638,6 +667,72 @@ impl App {
         self.sel_playlists = self
             .sel_playlists
             .min(self.smart_playlists.len().saturating_sub(1));
+    }
+
+    pub fn dispatch_intent(
+        &mut self,
+        intent: PlayerIntent,
+        c: &mut MutexGuard<'_, PlayerController>,
+    ) {
+        if self.active_zone.is_some() {
+            if let Some(tx) = &self.zone_tx {
+                let _ = tx.send(crate::zone::ZoneCommand::Intent(intent));
+            }
+        } else {
+            c.dispatch(intent);
+        }
+    }
+
+    fn cycle_zone(&mut self) {
+        let peers = if let Some(ns) = &self.network_state {
+            ns.lock().unwrap().peers.keys().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if peers.is_empty() {
+            self.active_zone = None;
+            self.status = "zone: local (no peers found)".into();
+            if let Some(tx) = &self.zone_tx {
+                let _ = tx.send(crate::zone::ZoneCommand::Switch(None));
+            }
+            return;
+        }
+
+        let mut sorted_peers = peers;
+        sorted_peers.sort();
+
+        let next_zone = match &self.active_zone {
+            None => Some(sorted_peers[0].clone()),
+            Some(current) => {
+                let pos = sorted_peers.iter().position(|p| p == current).unwrap_or(0);
+                if pos + 1 < sorted_peers.len() {
+                    Some(sorted_peers[pos + 1].clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        self.active_zone = next_zone.clone();
+        if let Some(tx) = &self.zone_tx {
+            let peer_info = next_zone.as_ref().and_then(|id| {
+                self.network_state
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .peers
+                    .get(id)
+                    .map(|p| (p.ip.clone(), p.ws_port))
+            });
+            let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
+        }
+
+        if let Some(z) = &self.active_zone {
+            self.status = format!("zone: {z}");
+        } else {
+            self.status = "zone: local".into();
+        }
     }
 
     // --- accessors used by the ui ---
@@ -917,9 +1012,9 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => return true,
-                KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
-                KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
-                KeyCode::Char('b') => c.dispatch(PlayerIntent::PreviousTrack),
+                KeyCode::Char('p') => self.dispatch_intent(PlayerIntent::TogglePlayPause, c),
+                KeyCode::Char('n') => self.dispatch_intent(PlayerIntent::NextTrack, c),
+                KeyCode::Char('b') => self.dispatch_intent(PlayerIntent::PreviousTrack, c),
                 KeyCode::Char('u') => {
                     self.search.clear();
                     self.invalidate_list();
@@ -941,7 +1036,7 @@ impl App {
                 if idx == 0 {
                     self.status = "no playlist 0".into();
                 } else if let Some(pl) = self.smart_playlists.get(idx - 1).cloned() {
-                    c.dispatch(PlayerIntent::ActivatePlaylist { id: pl.id });
+                    self.dispatch_intent(PlayerIntent::ActivatePlaylist { id: pl.id }, c);
                     self.status = format!("activated: {pl_name}", pl_name = pl.name);
                 } else {
                     self.status = format!("no playlist {n}");
@@ -974,14 +1069,19 @@ impl App {
             KeyCode::Enter => self.activate(c),
             KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Char('k') => self.move_selection(-1),
-            KeyCode::Char('p') => c.dispatch(PlayerIntent::TogglePlayPause),
-            KeyCode::Char('>') | KeyCode::Char('.') => c.dispatch(PlayerIntent::NextTrack),
-            KeyCode::Char('<') | KeyCode::Char(',') => c.dispatch(PlayerIntent::PreviousTrack),
-            KeyCode::Char('N') => c.dispatch(PlayerIntent::SkipAlbum),
+            KeyCode::Char('p') => self.dispatch_intent(PlayerIntent::TogglePlayPause, c),
+            KeyCode::Char('>') | KeyCode::Char('.') => {
+                self.dispatch_intent(PlayerIntent::NextTrack, c)
+            }
+            KeyCode::Char('<') | KeyCode::Char(',') => {
+                self.dispatch_intent(PlayerIntent::PreviousTrack, c)
+            }
+            KeyCode::Char('N') => self.dispatch_intent(PlayerIntent::SkipAlbum, c),
             KeyCode::Char('e') => self.enqueue_selected(c, false),
-            KeyCode::Char('n') => c.dispatch(PlayerIntent::NextTrack),
+            KeyCode::Char('n') => self.dispatch_intent(PlayerIntent::NextTrack, c),
             KeyCode::Char('f') => self.enqueue_selected(c, true),
             KeyCode::Char('x') => self.remove_from_queue(c),
+            KeyCode::Char('z') => self.cycle_zone(),
             KeyCode::Char('c') => {
                 self.view = match self.view {
                     ViewPreset::Minimal => ViewPreset::Compact,
@@ -995,7 +1095,7 @@ impl App {
             }
             KeyCode::Char('S') => {
                 let id = self.selected_track_id(c).unwrap_or_default();
-                c.dispatch(PlayerIntent::StopAfter { id });
+                self.dispatch_intent(PlayerIntent::StopAfter { id }, c);
                 self.status = match &c.stop_after {
                     Some(sid) => {
                         let label = c
@@ -1023,7 +1123,7 @@ impl App {
                 } else {
                     self.search.clone()
                 };
-                c.dispatch(PlayerIntent::SavePlaylist { name: name.clone() });
+                self.dispatch_intent(PlayerIntent::SavePlaylist { name: name.clone() }, c);
                 self.status = format!("saved playlist: {name}");
             }
             KeyCode::Char('g') => {
@@ -1042,12 +1142,12 @@ impl App {
             KeyCode::Char('5') => self.rate_selected(c, 5),
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 let v = (c.volume + 0.05).min(1.0);
-                c.dispatch(PlayerIntent::SetVolume { volume: v });
+                self.dispatch_intent(PlayerIntent::SetVolume { volume: v }, c);
                 self.status = format!("vol: {:0.0}%", v * 100.0);
             }
             KeyCode::Char('-') => {
                 let v = (c.volume - 0.05).max(0.0);
-                c.dispatch(PlayerIntent::SetVolume { volume: v });
+                self.dispatch_intent(PlayerIntent::SetVolume { volume: v }, c);
                 self.status = format!("vol: {:0.0}%", v * 100.0);
             }
             KeyCode::Left | KeyCode::Char('h') => self.seek_relative(c, -5),
@@ -1374,14 +1474,15 @@ impl App {
             if e.drilled {
                 // Track level: play the selected individual track.
                 if let Some(id) = self.selected_track_id(c) {
-                    c.dispatch(PlayerIntent::PlayTrack { id });
-                    self.status = format!("playing: {}", e.label);
+                    let label = e.label.clone();
+                    self.dispatch_intent(PlayerIntent::PlayTrack { id }, c);
+                    self.status = format!("playing: {}", label);
                 }
             } else {
                 // Album list level: play the selected album.
                 if let Some(a) = e.albums.get(e.selection).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
-                    play_sequence(c, tracks);
+                    self.play_sequence(c, tracks);
                     self.status = format!("playing album: {}", a.album);
                 }
             }
@@ -1403,44 +1504,44 @@ impl App {
                         // Radio: play just this track; the dynamic queue
                         // (constrained to the filter) handles next.
                         c.set_dynamic_source(expr, radio_sort);
-                        c.dispatch(PlayerIntent::PlayTrack { id });
+                        self.dispatch_intent(PlayerIntent::PlayTrack { id }, c);
                     } else if let Some(pos) = c.store.track_position(&id, &expr, list_sort) {
                         // Ordered: play the rest of the filtered list from here.
                         let ids = c.store.filter_ids(&expr, list_sort, u32::MAX, pos as u32);
                         c.set_dynamic_source(expr, radio_sort);
-                        play_sequence_ids(c, ids);
+                        self.play_sequence_ids(c, ids);
                     } else {
                         // Random list sort has no stable position — play just
                         // this track. No dynamic refill in ordered mode, so
                         // Next stops after this track.
                         c.set_dynamic_source(expr, radio_sort);
-                        c.dispatch(PlayerIntent::PlayTrack { id });
+                        self.dispatch_intent(PlayerIntent::PlayTrack { id }, c);
                     }
                 }
             }
             Tab::Queue => {
                 if let Some(id) = self.selected_track_id(c) {
-                    c.dispatch(PlayerIntent::JumpTo { id });
+                    self.dispatch_intent(PlayerIntent::JumpTo { id }, c);
                     self.status = "jumped to track".into();
                 }
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
-                    play_sequence(c, tracks);
+                    self.play_sequence(c, tracks);
                     self.status = format!("playing album: {} - {}", a.artist, a.album);
                 }
             }
             Tab::Artists => {
                 if let Some(a) = self.artists.get(self.sel_artists).cloned() {
                     let tracks = c.store.artist_tracks(&a.name);
-                    play_sequence(c, tracks);
+                    self.play_sequence(c, tracks);
                     self.status = format!("playing artist: {}", a.name);
                 }
             }
             Tab::Playlists => {
                 if let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned() {
-                    c.dispatch(PlayerIntent::ActivatePlaylist { id: pl.id.clone() });
+                    self.dispatch_intent(PlayerIntent::ActivatePlaylist { id: pl.id.clone() }, c);
                     self.status = format!("activated: {}", pl.name);
                 }
             }
@@ -1452,14 +1553,14 @@ impl App {
             if e.drilled {
                 // Track level: enqueue the selected track.
                 if let Some(id) = self.selected_track_id(c) {
-                    c.dispatch(PlayerIntent::Enqueue { id, next });
+                    self.dispatch_intent(PlayerIntent::Enqueue { id, next }, c);
                     self.status = if next { "play next" } else { "queued" }.into();
                 }
             } else {
                 // Album list level: enqueue the selected album.
                 if let Some(a) = e.albums.get(e.selection).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
-                    enqueue_sequence(c, tracks, next);
+                    self.enqueue_sequence(c, tracks, next);
                     self.status = if next { "album next" } else { "album queued" }.into();
                 }
             }
@@ -1468,21 +1569,21 @@ impl App {
         match self.tab {
             Tab::Tracks | Tab::Files => {
                 if let Some(id) = self.selected_track_id(c) {
-                    c.dispatch(PlayerIntent::Enqueue { id, next });
+                    self.dispatch_intent(PlayerIntent::Enqueue { id, next }, c);
                     self.status = if next { "play next" } else { "queued" }.into();
                 }
             }
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
-                    enqueue_sequence(c, tracks, next);
+                    self.enqueue_sequence(c, tracks, next);
                     self.status = if next { "album next" } else { "album queued" }.into();
                 }
             }
             Tab::Artists => {
                 if let Some(a) = self.artists.get(self.sel_artists).cloned() {
                     let tracks = c.store.artist_tracks(&a.name);
-                    enqueue_sequence(c, tracks, next);
+                    self.enqueue_sequence(c, tracks, next);
                     self.status = if next { "artist next" } else { "artist queued" }.into();
                 }
             }
@@ -1493,7 +1594,7 @@ impl App {
     fn remove_from_queue(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         if self.tab == Tab::Queue {
             if let Some(row) = self.queue_rows.get(self.sel_queue).cloned() {
-                c.dispatch(PlayerIntent::RemoveFromQueue { id: row.id });
+                self.dispatch_intent(PlayerIntent::RemoveFromQueue { id: row.id }, c);
                 self.status = "removed from queue".into();
             }
             return;
@@ -1501,7 +1602,7 @@ impl App {
         if self.tab == Tab::Playlists
             && let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned()
         {
-            c.dispatch(PlayerIntent::DeletePlaylist { id: pl.id });
+            self.dispatch_intent(PlayerIntent::DeletePlaylist { id: pl.id }, c);
             self.status = format!("deleted playlist: {}", pl.name);
         }
     }
@@ -1511,10 +1612,13 @@ impl App {
             return;
         }
         if let Some(pl) = self.smart_playlists.get(self.sel_playlists).cloned() {
-            c.dispatch(PlayerIntent::MovePlaylist {
-                id: pl.id.clone(),
-                up,
-            });
+            self.dispatch_intent(
+                PlayerIntent::MovePlaylist {
+                    id: pl.id.clone(),
+                    up,
+                },
+                c,
+            );
             if up && self.sel_playlists > 0 {
                 self.sel_playlists -= 1;
             } else if !up && self.sel_playlists + 1 < self.smart_playlists.len() {
@@ -1530,7 +1634,7 @@ impl App {
 
     fn rate_selected(&mut self, c: &mut MutexGuard<'_, PlayerController>, rating: u8) {
         if let Some(id) = self.selected_track_id(c) {
-            c.dispatch(PlayerIntent::RateTrack { id, rating });
+            self.dispatch_intent(PlayerIntent::RateTrack { id, rating }, c);
             self.status = format!("rated {}/5", rating);
         }
     }
@@ -1874,37 +1978,45 @@ impl App {
         pb.request_seek(target);
         self.status = format!("seek: {}", fmt_duration((target / 1000) as u32));
     }
-}
 
-/// Play `tracks` in order: clear the queue, enqueue them, play the first.
-fn play_sequence(c: &mut MutexGuard<'_, PlayerController>, tracks: Vec<Track>) {
-    let mut iter = tracks.into_iter();
-    if let Some(first) = iter.next() {
-        c.dispatch(PlayerIntent::PlayTrack { id: first.id });
-        for t in iter {
-            c.dispatch(PlayerIntent::Enqueue {
-                id: t.id,
-                next: false,
-            });
+    /// Play `tracks` in order: clear the queue, enqueue them, play the first.
+    fn play_sequence(&mut self, c: &mut MutexGuard<'_, PlayerController>, tracks: Vec<Track>) {
+        let mut iter = tracks.into_iter();
+        if let Some(first) = iter.next() {
+            self.dispatch_intent(PlayerIntent::PlayTrack { id: first.id }, c);
+            for t in iter {
+                self.dispatch_intent(
+                    PlayerIntent::Enqueue {
+                        id: t.id,
+                        next: false,
+                    },
+                    c,
+                );
+            }
         }
     }
-}
 
-/// Play track IDs in order: clear the queue, enqueue them, play the first.
-fn play_sequence_ids(c: &mut MutexGuard<'_, PlayerController>, ids: Vec<String>) {
-    let mut iter = ids.into_iter();
-    if let Some(first) = iter.next() {
-        c.dispatch(PlayerIntent::PlayTrack { id: first });
-        for id in iter {
-            c.dispatch(PlayerIntent::Enqueue { id, next: false });
+    /// Play track IDs in order: clear the queue, enqueue them, play the first.
+    fn play_sequence_ids(&mut self, c: &mut MutexGuard<'_, PlayerController>, ids: Vec<String>) {
+        let mut iter = ids.into_iter();
+        if let Some(first) = iter.next() {
+            self.dispatch_intent(PlayerIntent::PlayTrack { id: first }, c);
+            for id in iter {
+                self.dispatch_intent(PlayerIntent::Enqueue { id, next: false }, c);
+            }
         }
     }
-}
 
-/// Enqueue `tracks` without disturbing whatever is playing now.
-fn enqueue_sequence(c: &mut MutexGuard<'_, PlayerController>, tracks: Vec<Track>, next: bool) {
-    for t in tracks {
-        c.dispatch(PlayerIntent::Enqueue { id: t.id, next });
+    /// Enqueue `tracks` without disturbing whatever is playing now.
+    fn enqueue_sequence(
+        &mut self,
+        c: &mut MutexGuard<'_, PlayerController>,
+        tracks: Vec<Track>,
+        next: bool,
+    ) {
+        for t in tracks {
+            self.dispatch_intent(PlayerIntent::Enqueue { id: t.id, next }, c);
+        }
     }
 }
 

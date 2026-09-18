@@ -718,7 +718,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  N:skip-album  +/-:vol  h/l:seek  v:expand  f:play-next e:queue  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
+    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  N:skip-album  +/-:vol  h/l:seek  v:expand  f:play-next e:queue  z:zone  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
             "Enter:play  f:play-next  e:queue  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
@@ -745,7 +745,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::new();
-    let bindings: [(&str, &str); 28] = [
+    let bindings: [(&str, &str); 29] = [
         ("/search", "filter the current tab (Esc to leave)"),
         ("Tab / Shift+Tab", "switch tabs"),
         (
@@ -778,6 +778,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
             "o",
             "open settings (scan roots, listenbrainz token, volume)",
         ),
+        ("z", "cycle active zone (control remote players)"),
         ("Ctrl+J", "jump to currently playing track in the list"),
         ("q", "quit (Esc closes overlays)"),
     ];

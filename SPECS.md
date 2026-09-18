@@ -63,7 +63,9 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 
 ### 2.3. Key/value store
 
-The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled).
+The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled), `schema_version` (integer).
+
+On open, the store compares the stored `schema_version` against the current one. If it is older, the library tables (`tracks`, `track_sources`, `tombstones`, `tracks_with_local`) are dropped and the version bumped, forcing a fresh scan. The `kv` table is never touched, so user settings (roots, volume, token, playlists) survive the wipe. This guarantees deduplication correctness across breaking catalog changes (e.g. the switch from physical-path to metadata track IDs).
 
 ---
 
@@ -195,6 +197,7 @@ Metadata is read and written by lofty 0.25.
 | `Left` `Right` / `h` `l` | seek backward / forward 5s |
 | `H` `L` | seek backward / forward 30s |
 | `P` | save current search as a smart playlist |
+| `z` | cycle active zone (local, then each discovered peer in turn) |
 | `g1`-`g9` | activate saved playlist by index |
 | `J` `K` | move playlist down / up (playlists tab) |
 | `?` | help overlay (keybindings, search syntax, playlists, about/support) — scroll with j/k/arrows/PgUp/PgDn |
@@ -290,6 +293,8 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   The `PlayerController` state (Queue, Now Playing, Volume) belongs to the **Playback Target**.
 *   **Independent Queues:** A PC and a Phone maintain independent queues by default.
 *   **Remote Control:** The UI can switch its active "Zone". If the Phone selects the PC Zone, the Phone UI forwards all `PlayerIntent` keypresses over WebSocket to the PC.
+*   **Zone Cycling:** `z` in the TUI cycles the active zone through the discovered peers (sorted by instance id), wrapping back to local. Switching zones resets the remote state; the zone client thread reconnects and requests a status snapshot from the new target.
+*   **Remote UI State:** While a zone is active, the TUI renders the remote target's state instead of the local one: Now Playing, queue (explicit + dynamic), volume, and play/pause come from the target's `ControlResponse` (polled over the WebSocket). Local playback is left untouched; switching back to local restores the local view.
 *   **Zone Handoff:** A new `PlayerIntent::TransferZone { to_instance }` intent moves the current track, exact millisecond position, and queue to the new target, pausing the sender seamlessly.
 *   **Scrobbling:** Only the active Playback Target executes scrobbles, preventing duplicated API calls.
 
