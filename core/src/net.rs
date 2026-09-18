@@ -25,7 +25,8 @@ pub struct NetworkState {
 }
 
 /// Spawns the HTTP server, WebSocket server, and mDNS daemon on background threads.
-pub fn start_network(local_instance_id: String) -> Arc<Mutex<NetworkState>> {
+pub fn start_network(store: Arc<crate::store::LibraryStore>) -> Arc<Mutex<NetworkState>> {
+    let local_instance_id = store.local_instance_id();
     let state = Arc::new(Mutex::new(NetworkState {
         peers: HashMap::new(),
     }));
@@ -39,9 +40,27 @@ pub fn start_network(local_instance_id: String) -> Arc<Mutex<NetworkState>> {
         .expect("HTTP server bound to IP socket")
         .port();
 
+    let http_store = store.clone();
     thread::spawn(move || {
         for request in http_server.incoming_requests() {
-            // TODO(net): Implement /sync and /stream handlers
+            if request.url().starts_with("/sync") {
+                let since = request
+                    .url()
+                    .split("since=")
+                    .nth(1)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let payload = http_store.get_sync_payload(since);
+                let json = serde_json::to_string(&payload).unwrap_or_default();
+                let response = Response::from_string(json).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .unwrap(),
+                );
+                let _ = request.respond(response);
+                continue;
+            }
+
+            // TODO(net): Implement /stream handlers
             let _ = request.respond(Response::from_string("Currant Node"));
         }
     });
@@ -94,6 +113,14 @@ pub fn start_network(local_instance_id: String) -> Arc<Mutex<NetworkState>> {
     let state_clone = state.clone();
     let local_id = local_instance_id.clone();
 
+    // Shared HTTP agent for delta sync, with a bounded timeout so an
+    // unreachable peer can never hold the discovery thread hostage.
+    let sync_agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .build(),
+    );
+
     thread::spawn(move || {
         while let Ok(event) = receiver.recv() {
             match event {
@@ -110,23 +137,46 @@ pub fn start_network(local_instance_id: String) -> Arc<Mutex<NetworkState>> {
                             .get_property_val_str("ws")
                             .and_then(|p| p.parse().ok())
                             .unwrap_or(0);
+                        // Prefer a routable IPv4 address: mdns-sd may report a
+                        // link-local IPv6 or a docker-bridge IP that would make
+                        // the HTTP dial silently fail.
                         let ip = info
                             .get_addresses()
                             .iter()
-                            .next()
-                            .map(|ip| ip.to_ip_addr().to_string())
+                            .map(|a| a.to_ip_addr())
+                            .find(|a| a.is_ipv4() && !a.is_loopback())
+                            .or_else(|| info.get_addresses().iter().map(|a| a.to_ip_addr()).next())
+                            .map(|a| a.to_string())
                             .unwrap_or_default();
 
-                        let mut s = state_clone.lock().unwrap();
-                        s.peers.insert(
-                            id.to_string(),
-                            Peer {
-                                instance_id: id.to_string(),
-                                ip,
-                                http_port: http_p,
-                                ws_port: ws_p,
-                            },
-                        );
+                        {
+                            let mut s = state_clone.lock().unwrap();
+                            s.peers.insert(
+                                id.to_string(),
+                                Peer {
+                                    instance_id: id.to_string(),
+                                    ip: ip.clone(),
+                                    http_port: http_p,
+                                    ws_port: ws_p,
+                                },
+                            );
+                        }
+
+                        // Pull the peer's catalog delta in the background.
+                        let agent = sync_agent.clone();
+                        let sync_store = store.clone();
+                        let peer_id = id.to_string();
+                        thread::spawn(move || {
+                            let since = sync_store.get_last_sync(&peer_id);
+                            let url = format!("http://{ip}:{http_p}/sync?since={since}");
+                            if let Ok(mut response) = agent.get(&url).call()
+                                && let Ok(payload) =
+                                    response.body_mut().read_json::<crate::model::SyncPayload>()
+                            {
+                                sync_store.apply_sync_payload(&peer_id, &payload);
+                                sync_store.set_last_sync(&peer_id, crate::store::unix_now());
+                            }
+                        });
                     }
                 }
                 ServiceEvent::ServiceRemoved(_, fullname) => {

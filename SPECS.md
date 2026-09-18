@@ -138,7 +138,7 @@ All frontends fire `PlayerIntent` into the controller:
 
 *   `Scrobbler` trait: `report(track, event)`.
 *   Events: `NowPlaying` (on track start), `Submitted` (on track completion past threshold: half duration or 4 min, whichever is shorter).
-*   Listenbrainz is implemented (ureq HTTP). Last.fm is a future addition.
+*   Listenbrainz is implemented (ureq HTTP).
 *   Scrobbling never blocks playback; errors are ignored. Each report runs on a short-lived thread with a bounded HTTP timeout, so a slow or unreachable server cannot stall the audio thread.
 *   The Listenbrainz token is persisted in the `kv` store (`scrobble_token`). The TUI wires a `ListenbrainzScrobbler` on startup when the token is non-empty, and re-wires it live when the token is changed in the settings pane. An empty token disables scrobbling.
 
@@ -301,6 +301,5 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 Not yet implemented, listed for priority tracking:
 
 *   Android app (Kotlin + Media3, uniffi bindings)
-*   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Gapless playback

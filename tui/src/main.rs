@@ -87,8 +87,7 @@ fn main() -> Result<(), io::Error> {
         Arc::new(LibraryStore::open(&catalog_path()).expect("failed to open library catalog"));
 
     // Boot up the Mesh Networking Daemon
-    let local_instance_id = store.local_instance_id();
-    let network_state = currant_core::net::start_network(local_instance_id);
+    let network_state = currant_core::net::start_network(store.clone());
 
     let mut controller = PlayerController::new(store.clone());
 

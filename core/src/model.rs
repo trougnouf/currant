@@ -223,3 +223,11 @@ pub struct QueueSnapshot {
     pub history: Vec<String>,
     pub current_track: Option<String>,
 }
+
+/// A delta-catalog payload exchanged between peers over `GET /sync`. Carries
+/// the tracks modified since a high-water mark plus the logical IDs removed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncPayload {
+    pub tracks: Vec<Track>,
+    pub tombstones: Vec<String>,
+}

@@ -7,7 +7,7 @@
 //! `controller`) and is snapshotted here on exit.
 
 use crate::matcher::{self, SqlParam};
-use crate::model::{Album, Artist, QueueSnapshot, SmartPlaylist, SortPreset, Track};
+use crate::model::{Album, Artist, QueueSnapshot, SmartPlaylist, SortPreset, SyncPayload, Track};
 use crate::text;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -331,13 +331,29 @@ impl LibraryStore {
         }
         conn.execute_batch("BEGIN IMMEDIATE").ok();
         let mut deleted = 0;
+        let now = unix_now();
         for path in to_delete {
-            deleted += conn
-                .execute(
-                    "DELETE FROM tracks WHERE path = ?1",
-                    rusqlite::params![path],
-                )
-                .unwrap_or(0);
+            // Capture the logical ID so we can emit a tombstone, letting peers
+            // drop the track too once they receive the next delta sync.
+            if let Ok(logical_id) = conn.query_row(
+                "SELECT id FROM tracks WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get::<_, String>(0),
+            ) {
+                let rows = conn
+                    .execute(
+                        "DELETE FROM tracks WHERE path = ?1",
+                        rusqlite::params![path],
+                    )
+                    .unwrap_or(0);
+                if rows > 0 {
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO tombstones (logical_id, deleted_at) VALUES (?1, ?2)",
+                        rusqlite::params![logical_id, now],
+                    );
+                    deleted += rows;
+                }
+            }
         }
         conn.execute_batch("COMMIT").ok();
         deleted
@@ -864,6 +880,124 @@ impl LibraryStore {
     pub fn load_scrobble_token(&self) -> String {
         self.kv_get("scrobble_token").unwrap_or_default()
     }
+
+    // --- mesh delta synchronization ---
+
+    /// High-water mark (unix seconds) of the last completed sync from a peer.
+    pub fn get_last_sync(&self, peer_id: &str) -> i64 {
+        self.kv_get(&format!("sync_last_{peer_id}"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Record the high-water mark after a successful sync from a peer.
+    pub fn set_last_sync(&self, peer_id: &str, timestamp: i64) {
+        self.kv_set(&format!("sync_last_{peer_id}"), &timestamp.to_string());
+    }
+
+    /// Collect the tracks and tombstones modified after `since`, ready to be
+    /// serialized and served to a connecting peer.
+    pub fn get_sync_payload(&self, since: i64) -> SyncPayload {
+        let conn = self.read_conn();
+        let mut tracks = Vec::new();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT id, path, title, artist, album_artist, album, genre, comment,
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
+             FROM tracks WHERE updated_at > ?1",
+        )
+            && let Ok(rows) = stmt.query(rusqlite::params![since]) {
+                tracks.extend(rows.mapped(row_to_track).flatten());
+            }
+
+        let mut tombstones = Vec::new();
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT logical_id FROM tombstones WHERE deleted_at > ?1")
+            && let Ok(mut rows) = stmt.query(rusqlite::params![since])
+        {
+            while let Ok(Some(row)) = rows.next() {
+                if let Ok(id) = row.get::<_, String>(0) {
+                    tombstones.push(id);
+                }
+            }
+        }
+
+        SyncPayload { tracks, tombstones }
+    }
+
+    /// Merge a peer's delta payload into the local catalog. Remote metadata
+    /// wins when newer; local play data is preserved unless the peer played
+    /// the track more recently (highest `last_played` wins). Remote files are
+    /// mapped into `track_sources` under the peer's `instance_id`.
+    pub fn apply_sync_payload(&self, peer_id: &str, payload: &SyncPayload) {
+        let mut conn = self.write_conn();
+        let tx = conn.transaction().unwrap();
+
+        for track in &payload.tracks {
+            let current_updated: i64 = tx
+                .query_row(
+                    "SELECT updated_at FROM tracks WHERE id = ?1",
+                    rusqlite::params![track.id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(-1);
+
+            if track.updated_at > current_updated {
+                let title_fold = text::fold(&track.title);
+                let artist_fold = text::fold(&track.artist);
+                let album_artist_fold = text::fold(&track.album_artist);
+                let album_fold = text::fold(&track.album);
+                let genre_fold = text::fold(&track.genre);
+                let comment_fold = text::fold(&track.comment);
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO tracks
+                        (id, path, title, artist, album_artist, album, genre, comment,
+                         title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
+                         track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+                    rusqlite::params![
+                        track.id, track.path, track.title, track.artist, track.album_artist, track.album, track.genre, track.comment,
+                        title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
+                        track.track_number, track.year, track.duration_secs, track.rating, track.play_count, track.last_played, track.file_mtime, track.updated_at
+                    ],
+                );
+            } else {
+                // Local metadata is newer; keep it, but adopt the peer's play
+                // data if it is more recent.
+                let current_last_played: i64 = tx
+                    .query_row(
+                        "SELECT last_played FROM tracks WHERE id = ?1",
+                        rusqlite::params![track.id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                if track.last_played.unwrap_or(0) > current_last_played {
+                    let _ = tx.execute(
+                        "UPDATE tracks SET play_count = ?1, last_played = ?2 WHERE id = ?3",
+                        rusqlite::params![track.play_count, track.last_played, track.id],
+                    );
+                }
+            }
+
+            let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
+                1
+            } else {
+                0
+            };
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO track_sources (logical_id, instance_id, path, format_tier, file_mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![track.id, peer_id, track.path, format_tier, track.file_mtime],
+            );
+        }
+
+        for tombstone in &payload.tombstones {
+            let _ = tx.execute(
+                "DELETE FROM track_sources WHERE logical_id = ?1 AND instance_id = ?2",
+                rusqlite::params![tombstone, peer_id],
+            );
+        }
+
+        tx.commit().unwrap();
+    }
 }
 
 fn params_as_dyn(params: &[SqlParam]) -> Vec<&dyn rusqlite::ToSql> {
@@ -1074,7 +1208,7 @@ fn migrate(conn: &Connection) {
     }
 }
 
-fn unix_now() -> i64 {
+pub fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
