@@ -65,6 +65,8 @@ fn handle(stream: std::os::unix::net::UnixStream, controller: &Mutex<PlayerContr
                 is_playing: false,
                 volume: 0.0,
                 current_track: None,
+                position_ms: 0,
+                stop_after: None,
                 queue: Default::default(),
                 error: Some(format!("bad request: {e}")),
             };
@@ -82,6 +84,8 @@ fn handle(stream: std::os::unix::net::UnixStream, controller: &Mutex<PlayerContr
             is_playing: c.is_playing,
             volume: c.volume,
             current_track: c.current_track_ref(),
+            position_ms: c.playback_state.position_ms(),
+            stop_after: c.stop_after.clone(),
             queue: c.queue_snapshot(),
             error: None,
         }

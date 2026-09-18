@@ -106,6 +106,8 @@ pub fn start_network(
                                             is_playing: ctrl.is_playing,
                                             volume: ctrl.volume,
                                             current_track: ctrl.current_track_ref(),
+                                            position_ms: ctrl.playback_state.position_ms(),
+                                            stop_after: ctrl.stop_after.clone(),
                                             queue: ctrl.queue_snapshot(),
                                             error: None,
                                         };

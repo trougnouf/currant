@@ -12,6 +12,48 @@ use crate::store::LibraryStore;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+
+/// Shared playback position + seek channel between the audio thread and the
+/// UI. Position is in milliseconds; the audio thread writes it every loop
+/// iteration, the UI reads it each frame. Seek requests use a sentinel of -1
+/// (no pending seek) or a non-negative millisecond target.
+pub struct PlaybackState {
+    position_ms: AtomicU64,
+    seek_ms: AtomicI64,
+}
+
+impl Default for PlaybackState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlaybackState {
+    pub fn new() -> Self {
+        Self {
+            position_ms: AtomicU64::new(0),
+            seek_ms: AtomicI64::new(-1),
+        }
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        self.position_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn request_seek(&self, ms: u64) {
+        self.seek_ms.store(ms as i64, Ordering::Relaxed);
+    }
+
+    pub fn take_seek(&self) -> Option<u64> {
+        let v = self.seek_ms.swap(-1, Ordering::Relaxed);
+        if v >= 0 { Some(v as u64) } else { None }
+    }
+
+    pub fn set_position(&self, ms: u64) {
+        self.position_ms.store(ms, Ordering::Relaxed);
+    }
+}
 
 /// How many tracks the dynamic queue pre-fetches at a time.
 const DYNAMIC_BATCH: u32 = 50;
@@ -40,6 +82,8 @@ pub struct PlayerController {
     scrobbler: Arc<dyn Scrobbler>,
 
     smart_playlists: Vec<SmartPlaylist>,
+
+    pub playback_state: Arc<PlaybackState>,
 }
 
 impl PlayerController {
@@ -65,6 +109,7 @@ impl PlayerController {
             dynamic_sort: SortPreset::RandomAlbum,
             scrobbler: Arc::new(NoopScrobbler),
             smart_playlists,
+            playback_state: Arc::new(PlaybackState::new()),
         }
     }
 
@@ -302,10 +347,8 @@ impl PlayerController {
             PlayerIntent::SetVolume { volume } => {
                 self.volume = volume.clamp(0.0, 1.0);
             }
-            PlayerIntent::SeekTo { .. } => {
-                // Seeking is owned by the audio frontend (see `PlaybackState`);
-                // the core controller has no audio position to mutate. Present
-                // so the wire protocol and every frontend share one vocabulary.
+            PlayerIntent::SeekTo { position_ms } => {
+                self.playback_state.request_seek(position_ms);
             }
             PlayerIntent::TransferZone { .. } => {
                 // Zone handoff is a networking concern handled by the frontend

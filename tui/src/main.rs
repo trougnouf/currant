@@ -143,7 +143,7 @@ fn main() -> Result<(), io::Error> {
     });
     spawn_watcher(store.clone(), watcher_rx, progress_tx);
 
-    let playback = Arc::new(audio::PlaybackState::new());
+    let playback = controller.lock().unwrap().playback_state.clone();
     crate::audio::spawn(controller.clone(), playback.clone(), network_state.clone());
     crate::control::spawn(controller.clone());
 

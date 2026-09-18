@@ -4,6 +4,7 @@
 //! playback from the controller's live queue. Opus falls back to the bundled
 //! libopus decoder; everything else is decoded by symphonia via rodio.
 
+use currant_core::controller::PlaybackState;
 use currant_core::controller::PlayerController;
 use currant_core::model::{PlayerIntent, Track};
 use currant_core::net::NetworkState;
@@ -13,45 +14,9 @@ use lofty::file::TaggedFileExt;
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-/// Shared playback position + seek channel between the audio thread and the
-/// UI. Position is in milliseconds; the audio thread writes it every loop
-/// iteration, the UI reads it each frame. Seek requests use a sentinel of -1
-/// (no pending seek) or a non-negative millisecond target.
-pub struct PlaybackState {
-    position_ms: AtomicU64,
-    seek_ms: AtomicI64,
-}
-
-impl PlaybackState {
-    pub fn new() -> Self {
-        Self {
-            position_ms: AtomicU64::new(0),
-            seek_ms: AtomicI64::new(-1),
-        }
-    }
-
-    pub fn position_ms(&self) -> u64 {
-        self.position_ms.load(Ordering::Relaxed)
-    }
-
-    pub fn request_seek(&self, ms: u64) {
-        self.seek_ms.store(ms as i64, Ordering::Relaxed);
-    }
-
-    fn take_seek(&self) -> Option<u64> {
-        let v = self.seek_ms.swap(-1, Ordering::Relaxed);
-        if v >= 0 { Some(v as u64) } else { None }
-    }
-
-    fn set_position(&self, ms: u64) {
-        self.position_ms.store(ms, Ordering::Relaxed);
-    }
-}
 
 /// Minimum fraction/length of a track before a completion scrobble is sent.
 fn scrobble_threshold(duration_secs: u32) -> Duration {

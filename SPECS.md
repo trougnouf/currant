@@ -115,8 +115,8 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 
 ### 4.2. Position, seeking, and ReplayGain
 
-*   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics). The UI reads it each frame.
-*   Seeking is requested through the same `PlaybackState`: the UI sets a target in milliseconds, the audio thread calls `Player::try_seek` on the next loop iteration.
+*   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics) owned by the `PlayerController` in core. The UI reads it each frame; the control protocol reports it in `ControlResponse`.
+*   Seeking is requested through the same `PlaybackState`: `SeekTo` is resolved by the controller, which stores the target in milliseconds, and the audio thread calls `Player::try_seek` on the next loop iteration.
 *   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
 *   The now-playing bar shows `position / duration` and a progress bar (Gauge widget).
 *   ReplayGain is supported and applied at playback time. When enabled, it calculates a volume multiplier using `REPLAYGAIN_TRACK_GAIN` metadata tags extracted by lofty right before playback.
@@ -132,7 +132,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `JumpTo` — skip to a track already in the queue without clearing the rest. Tracks before it go to history.
 *   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `SkipAlbum`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off. `SkipAlbum` drops contiguous tracks of the current album from the queues and skips.
 *   `SetVolume` — 0.0 to 1.0, persisted.
-*   `SeekTo { position_ms }` — seek the current track to a position in milliseconds. Executed by the audio frontend (see 4.2); present so the wire protocol and every frontend share one intent vocabulary.
+*   `SeekTo { position_ms }` — seek the current track to a position in milliseconds. The controller resolves it against its shared `PlaybackState` (see 4.2), so it works identically for local playback and when forwarded to a remote zone.
 *   `TransferZone { to_instance }` — hand off the active zone (current track, exact position, queue) to another instance, pausing the sender; see 8.4.
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
 *   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` / `MovePlaylist { id, up }` — smart playlist management. `MovePlaylist` reorders (swaps with neighbor), changing the `g1`-`g9` index mapping.
@@ -231,7 +231,7 @@ Remote control for a running Currant instance. Connects to the TUI's control soc
 
 ### 7.1. Protocol
 
-One JSON line per request, one JSON line per response. `ControlRequest` is tagged with `type` (`"Intent"` or `"Status"`). `ControlResponse` contains `is_playing`, `volume`, `current_track` (full `Track` or null), `queue` (`QueueSnapshot`), and an optional `error` field.
+One JSON line per request, one JSON line per response. `ControlRequest` is tagged with `type` (`"Intent"` or `"Status"`). `ControlResponse` contains `is_playing`, `volume`, `current_track` (full `Track` or null), `position_ms`, `stop_after`, `queue` (`QueueSnapshot`), and an optional `error` field.
 
 ### 7.2. Commands
 
@@ -294,7 +294,7 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   **Independent Queues:** A PC and a Phone maintain independent queues by default.
 *   **Remote Control:** The UI can switch its active "Zone". If the Phone selects the PC Zone, the Phone UI forwards all `PlayerIntent` keypresses over WebSocket to the PC.
 *   **Zone Cycling:** `z` in the TUI cycles the active zone through the discovered peers (sorted by instance id), wrapping back to local. Switching zones resets the remote state; the zone client thread reconnects and requests a status snapshot from the new target.
-*   **Remote UI State:** While a zone is active, the TUI renders the remote target's state instead of the local one: Now Playing, queue (explicit + dynamic), volume, and play/pause come from the target's `ControlResponse` (polled over the WebSocket). Local playback is left untouched; switching back to local restores the local view.
+*   **Remote UI State:** While a zone is active, the TUI renders the remote target's state instead of the local one: Now Playing, queue (explicit + dynamic), volume, play/pause, position, and stop-after come from the target's `ControlResponse` (polled over the WebSocket). Seek and stop-after intents are forwarded like any other keypress. Local playback is left untouched; switching back to local restores the local view.
 *   **Zone Handoff:** A new `PlayerIntent::TransferZone { to_instance }` intent moves the current track, exact millisecond position, and queue to the new target, pausing the sender seamlessly.
 *   **Scrobbling:** Only the active Playback Target executes scrobbles, preventing duplicated API calls.
 

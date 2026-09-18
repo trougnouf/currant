@@ -28,6 +28,8 @@ pub struct ControlResponse {
     pub is_playing: bool,
     pub volume: f32,
     pub current_track: Option<Track>,
+    pub position_ms: u64,
+    pub stop_after: Option<String>,
     pub queue: QueueSnapshot,
     /// Present only if the request failed.
     #[serde(skip_serializing_if = "Option::is_none")]

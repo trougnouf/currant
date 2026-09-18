@@ -3,7 +3,6 @@
 //! TUI application state: tabs, search, sort, view presets, windowed caches
 //! and the key bindings that drive the controller.
 
-use crate::audio::PlaybackState;
 use currant_core::controller::PlayerController;
 use currant_core::matcher::{self, parse_query};
 use currant_core::model::{Album, Artist, PlayerIntent, SmartPlaylist, SortPreset, Track};
@@ -391,7 +390,7 @@ pub struct App {
     pub smart_playlists: Vec<SmartPlaylist>,
 
     /// Shared playback state (position + seek channel) with the audio thread.
-    playback: Option<Arc<PlaybackState>>,
+    playback: Option<Arc<currant_core::controller::PlaybackState>>,
 
     /// True when `g` was pressed and we expect a digit to activate a playlist.
     pending_g: bool,
@@ -492,11 +491,20 @@ impl App {
         self.scan_progress = Some(p);
     }
 
-    pub fn set_playback(&mut self, p: Arc<PlaybackState>) {
+    pub fn set_playback(&mut self, p: Arc<currant_core::controller::PlaybackState>) {
         self.playback = Some(p);
     }
 
     pub fn position_ms(&self) -> u64 {
+        if self.active_zone.is_some() {
+            if let Some(rs_arc) = &self.remote_state
+                && let Ok(guard) = rs_arc.lock()
+                && let Some(rs) = guard.as_ref()
+            {
+                return rs.position_ms;
+            }
+            return 0;
+        }
         self.playback.as_ref().map(|p| p.position_ms()).unwrap_or(0)
     }
 
@@ -520,7 +528,7 @@ impl App {
                 self.now_playing = rs.current_track.clone();
                 self.is_playing = rs.is_playing;
                 self.volume = rs.volume;
-                self.stop_after = None;
+                self.stop_after = rs.stop_after.clone();
                 self.refresh_queue_from_snapshot(&rs.queue, &c.store);
                 using_remote = true;
             }
@@ -1095,18 +1103,22 @@ impl App {
             }
             KeyCode::Char('S') => {
                 let id = self.selected_track_id(c).unwrap_or_default();
-                self.dispatch_intent(PlayerIntent::StopAfter { id }, c);
-                self.status = match &c.stop_after {
-                    Some(sid) => {
-                        let label = c
-                            .store
-                            .get_track(sid)
-                            .map(|t| format!("{} - {}", t.artist, t.title))
-                            .unwrap_or_else(|| sid.clone());
-                        format!("stop after: {label}")
-                    }
-                    None => "stop after: off".into(),
-                };
+                self.dispatch_intent(PlayerIntent::StopAfter { id: id.clone() }, c);
+                if self.active_zone.is_some() {
+                    self.status = "toggled stop after".into();
+                } else {
+                    self.status = match &c.stop_after {
+                        Some(sid) => {
+                            let label = c
+                                .store
+                                .get_track(sid)
+                                .map(|t| format!("{} - {}", t.artist, t.title))
+                                .unwrap_or_else(|| sid.clone());
+                            format!("stop after: {label}")
+                        }
+                        None => "stop after: off".into(),
+                    };
+                }
             }
             KeyCode::Char('r') => self.toggle_radio(c),
             KeyCode::Char('R') => self.toggle_radio(c),
@@ -1217,7 +1229,7 @@ impl App {
                 } else if row >= chunks[1].top() && row < chunks[1].bottom() {
                     self.handle_list_click(row, chunks[1], c);
                 } else if row >= chunks[2].top() && row < chunks[2].bottom() {
-                    self.handle_footer_click(col, row, chunks[2]);
+                    self.handle_footer_click(col, row, chunks[2], c);
                 }
             }
             _ => {}
@@ -1304,7 +1316,13 @@ impl App {
     }
 
     /// Click on the progress bar in the footer: seek to the clicked position.
-    fn handle_footer_click(&mut self, col: u16, row: u16, area: Rect) {
+    fn handle_footer_click(
+        &mut self,
+        col: u16,
+        row: u16,
+        area: Rect,
+        c: &mut MutexGuard<'_, PlayerController>,
+    ) {
         // Footer: 4-row now-playing block + 1-row status.
         let footer_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1318,7 +1336,6 @@ impl App {
             return;
         }
 
-        let Some(pb) = &self.playback else { return };
         let Some(t) = &self.now_playing else { return };
         if t.duration_secs == 0 {
             return;
@@ -1333,7 +1350,12 @@ impl App {
             .min(gauge_w - 1);
         let fraction = pos as f64 / gauge_w as f64;
         let target_ms = (fraction * t.duration_secs as f64 * 1000.0) as u64;
-        pb.request_seek(target_ms);
+        self.dispatch_intent(
+            PlayerIntent::SeekTo {
+                position_ms: target_ms,
+            },
+            c,
+        );
         self.status = format!("seek: {}", fmt_duration((target_ms / 1000) as u32));
     }
 
@@ -1966,16 +1988,20 @@ impl App {
         }
     }
 
-    fn seek_relative(&mut self, _c: &mut MutexGuard<'_, PlayerController>, delta_secs: i64) {
-        let Some(pb) = &self.playback else { return };
-        let pos_ms = pb.position_ms() as i64;
+    fn seek_relative(&mut self, c: &mut MutexGuard<'_, PlayerController>, delta_secs: i64) {
+        let pos_ms = self.position_ms() as i64;
         let dur_ms = self
             .now_playing
             .as_ref()
             .map(|t| t.duration_secs as i64 * 1000)
             .unwrap_or(0);
         let target = (pos_ms + delta_secs * 1000).max(0).min(dur_ms) as u64;
-        pb.request_seek(target);
+        self.dispatch_intent(
+            PlayerIntent::SeekTo {
+                position_ms: target,
+            },
+            c,
+        );
         self.status = format!("seek: {}", fmt_duration((target / 1000) as u32));
     }
 
