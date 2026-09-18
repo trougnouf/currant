@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Mesh networking: HTTP server for streaming/sync, WebSocket for control, and mDNS for discovery.
 
+pub mod stream;
+
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tiny_http::{Response, Server};
+use tiny_http::{Header, Response, Server, StatusCode};
 use tungstenite::accept;
 
 pub const SERVICE_TYPE: &str = "_currant._tcp.local.";
@@ -60,7 +63,13 @@ pub fn start_network(store: Arc<crate::store::LibraryStore>) -> Arc<Mutex<Networ
                 continue;
             }
 
-            // TODO(net): Implement /stream handlers
+            if let Some(id) = request.url().strip_prefix("/stream/") {
+                let id = id.split('?').next().unwrap_or("");
+                let response = serve_stream(&http_store, id, request.headers());
+                let _ = request.respond(response);
+                continue;
+            }
+
             let _ = request.respond(Response::from_string("Currant Node"));
         }
     });
@@ -190,4 +199,90 @@ pub fn start_network(store: Arc<crate::store::LibraryStore>) -> Arc<Mutex<Networ
     });
 
     state
+}
+
+/// Serve one `GET /stream/:logical_id` request. 404 when this instance has no
+/// physical copy, 416 for a range past EOF, 206 with the requested byte
+/// window, 200 with the whole file otherwise.
+fn serve_stream(
+    store: &crate::store::LibraryStore,
+    logical_id: &str,
+    headers: &[Header],
+) -> Response<Box<dyn Read + Send>> {
+    let accept_ranges = Header::from_bytes(&b"Accept-Ranges"[..], &b"bytes"[..]).unwrap();
+    let not_found = Response::new(
+        StatusCode(404),
+        vec![],
+        Box::new(std::io::empty()) as Box<dyn Read + Send>,
+        Some(0),
+        None,
+    );
+    let Some(path) = store.get_local_source_path(logical_id) else {
+        return not_found;
+    };
+    let Ok(file) = std::fs::File::open(&path) else {
+        return not_found;
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+
+    let range = headers
+        .iter()
+        .find(|h| h.field.equiv("Range"))
+        .map(|h| h.value.as_str())
+        .and_then(parse_range)
+        .map(|(start, end)| {
+            // Clamp the window to the file; an open-ended range runs to EOF.
+            let end = end.map(|e| e.saturating_add(1)).unwrap_or(len).min(len);
+            (start, end)
+        });
+
+    match range {
+        // Unsatisfiable: start past EOF, or an empty/malformed window.
+        Some((start, end)) if start >= len || end <= start => Response::new(
+            StatusCode(416),
+            vec![
+                Header::from_bytes(&b"Content-Range"[..], format!("bytes */{len}").as_bytes())
+                    .unwrap(),
+            ],
+            Box::new(std::io::empty()) as Box<dyn Read + Send>,
+            Some(0),
+            None,
+        ),
+        Some((start, end)) => {
+            let mut file = BufReader::new(file);
+            let _ = file.seek(SeekFrom::Start(start));
+            Response::new(
+                StatusCode(206),
+                vec![
+                    Header::from_bytes(
+                        &b"Content-Range"[..],
+                        format!("bytes {start}-{}/{len}", end - 1).as_bytes(),
+                    )
+                    .unwrap(),
+                    accept_ranges,
+                ],
+                Box::new(file.take(end - start)) as Box<dyn Read + Send>,
+                Some((end - start) as usize),
+                None,
+            )
+        }
+        None => Response::new(
+            StatusCode(200),
+            vec![accept_ranges],
+            Box::new(file) as Box<dyn Read + Send>,
+            Some(len as usize),
+            None,
+        ),
+    }
+}
+
+/// Parse a `Range` header into `(start, Option<end>)`. Only the common
+/// `bytes=N-` / `bytes=N-M` forms are understood; anything else is treated
+/// as "no range".
+fn parse_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let spec = value.strip_prefix("bytes=")?;
+    let (start, end) = spec.split_once('-')?;
+    let start: u64 = start.trim().parse().ok()?;
+    let end = end.trim().parse().ok();
+    Some((start, end))
 }

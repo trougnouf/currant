@@ -138,7 +138,7 @@ fn main() -> Result<(), io::Error> {
 
     let controller = Arc::new(Mutex::new(controller));
     let playback = Arc::new(audio::PlaybackState::new());
-    crate::audio::spawn(controller.clone(), playback.clone());
+    crate::audio::spawn(controller.clone(), playback.clone(), network_state.clone());
     crate::control::spawn(controller.clone());
 
     let mut app = App::new();

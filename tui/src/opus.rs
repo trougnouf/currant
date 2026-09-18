@@ -7,12 +7,11 @@
 //! the desktop TUI. The whole file is decoded up front — Opus files are small
 //! and this keeps the `Source` implementation trivial and seek-free.
 
+use currant_core::net::stream::Seekable;
 use rodio::source::SeekError;
 use rodio::source::Source;
-use std::fs::File;
 use std::io::BufReader;
 use std::num::NonZero;
-use std::path::Path;
 use std::time::Duration;
 
 const OPUS_SAMPLE_RATE: u32 = 48000;
@@ -26,10 +25,10 @@ pub struct OpusSource {
 }
 
 impl OpusSource {
-    /// Decode the Opus track at `path` into interleaved f32 samples.
-    pub fn open(path: &Path) -> Result<Self, String> {
-        let file = File::open(path).map_err(|e| format!("open: {e}"))?;
-        let mut reader = ogg::PacketReader::new(BufReader::new(file));
+    /// Decode an Opus track from any seekable source (local file or remote
+    /// HTTP stream) into interleaved f32 samples.
+    pub fn open(reader: Box<dyn Seekable>) -> Result<Self, String> {
+        let mut reader = ogg::PacketReader::new(BufReader::new(reader));
 
         let mut channels: u16 = 2;
         let mut pre_skip: u16 = 0;

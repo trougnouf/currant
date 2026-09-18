@@ -5,7 +5,10 @@
 //! libopus decoder; everything else is decoded by symphonia via rodio.
 
 use currant_core::controller::PlayerController;
-use currant_core::model::PlayerIntent;
+use currant_core::model::{PlayerIntent, Track};
+use currant_core::net::NetworkState;
+use currant_core::net::stream::{HttpSeekableReader, Seekable};
+use currant_core::store::LibraryStore;
 use lofty::file::TaggedFileExt;
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
@@ -87,28 +90,51 @@ fn track_gain_multiplier(path: &Path) -> f32 {
     10.0_f32.powf(db / 20.0).clamp(0.1, 10.0)
 }
 
-/// Open `path` as a rodio `Source`. Tries symphonia first, then the opus
-/// decoder when the `opus` feature is enabled.
-fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
-    let p = Path::new(path);
-    if let Ok(file) = File::open(p)
-        && let Ok(decoder) = Decoder::try_from(file)
+/// Open a track as a rodio `Source`. Local files are opened directly; remote
+/// tracks are streamed from the peer that owns them through a seekable HTTP
+/// reader. Tries symphonia first, then the opus decoder when the `opus`
+/// feature is enabled.
+fn open_source(
+    track: &Track,
+    store: &LibraryStore,
+    network: &Arc<Mutex<NetworkState>>,
+) -> Option<Box<dyn Source<Item = f32> + Send>> {
+    // A fresh seekable reader per attempt: each decoder consumes its reader,
+    // so a failed first attempt must not leave the second one starting
+    // mid-file.
+    let make_reader = || -> Option<Box<dyn Seekable>> {
+        if track.is_local {
+            File::open(&track.path)
+                .ok()
+                .map(|f| Box::new(f) as Box<dyn Seekable>)
+        } else {
+            let peer_id = store.get_remote_source_peer(&track.id)?;
+            let peer = {
+                let state = network.lock().unwrap();
+                state.peers.get(&peer_id)?.clone()
+            };
+            let url = format!("http://{}:{}/stream/{}", peer.ip, peer.http_port, track.id);
+            Some(Box::new(HttpSeekableReader::new(&url).ok()?))
+        }
+    };
+
+    if let Some(reader) = make_reader()
+        && let Ok(decoder) = Decoder::new(reader)
     {
         return Some(Box::new(decoder));
     }
     #[cfg(feature = "opus")]
     {
-        let is_opus = p
+        let is_opus = Path::new(&track.path)
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("opus") || e.eq_ignore_ascii_case("ogg"));
-        if is_opus && let Ok(src) = crate::opus::OpusSource::open(p) {
+        if is_opus
+            && let Some(reader) = make_reader()
+            && let Ok(src) = crate::opus::OpusSource::open(reader)
+        {
             return Some(Box::new(src));
         }
-    }
-    #[cfg(not(feature = "opus"))]
-    {
-        let _ = p;
     }
     None
 }
@@ -117,6 +143,7 @@ fn open_source(path: &str) -> Option<Box<dyn Source<Item = f32> + Send>> {
 pub fn spawn(
     controller: Arc<Mutex<PlayerController>>,
     state: Arc<PlaybackState>,
+    network: Arc<Mutex<NetworkState>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let stream = match DeviceSinkBuilder::open_default_sink() {
@@ -197,16 +224,14 @@ pub fn spawn(
                 }
 
                 if let Some(id) = &current {
-                    let path = controller.lock().unwrap().store.get_path(id);
-                    match path.as_deref().and_then(open_source) {
+                    let store = controller.lock().unwrap().store.clone();
+                    let track = store.get_track(id);
+                    match track
+                        .as_ref()
+                        .and_then(|t| open_source(t, &store, &network))
+                    {
                         Some(src) => {
-                            let dur = controller
-                                .lock()
-                                .unwrap()
-                                .store
-                                .get_track(id)
-                                .map(|t| t.duration_secs)
-                                .unwrap_or(0);
+                            let dur = track.as_ref().map(|t| t.duration_secs).unwrap_or(0);
                             threshold = scrobble_threshold(dur);
                             player.append(src);
                             player.play();

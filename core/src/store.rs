@@ -65,6 +65,15 @@ CREATE INDEX IF NOT EXISTS idx_tracks_artist_fold ON tracks(artist_fold);
 CREATE INDEX IF NOT EXISTS idx_tracks_album_fold  ON tracks(album_fold);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+
+CREATE VIEW IF NOT EXISTS tracks_with_local AS
+SELECT t.*,
+       EXISTS(
+           SELECT 1 FROM track_sources s
+           WHERE s.logical_id = t.id
+             AND s.instance_id = (SELECT value FROM kv WHERE key = 'instance_id')
+       ) AS is_local
+FROM tracks t;
 ";
 
 /// Register the `fold` scalar function for accent-insensitive, case-insensitive
@@ -200,11 +209,7 @@ impl LibraryStore {
         let comment_fold = text::fold(&track.comment);
         let now = unix_now();
         conn.execute(
-            "INSERT OR REPLACE INTO tracks
-                (id, path, title, artist, album_artist, album, genre, comment,
-                 title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
-                 track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+            UPSERT_TRACK_SQL,
             rusqlite::params![
                 track.id,
                 track.path,
@@ -255,8 +260,8 @@ impl LibraryStore {
         let conn = self.read_conn();
         conn.query_row(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-             FROM tracks WHERE id = ?1",
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+             FROM tracks_with_local WHERE id = ?1",
             rusqlite::params![id],
             row_to_track,
         )
@@ -424,8 +429,8 @@ impl LibraryStore {
 
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-             FROM tracks {where_sql}
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+             FROM tracks_with_local {where_sql}
              ORDER BY {order}
              LIMIT ? OFFSET ?"
         );
@@ -536,8 +541,8 @@ impl LibraryStore {
         }
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-             FROM tracks WHERE {track_where}
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+             FROM tracks_with_local WHERE {track_where}
              ORDER BY track_number, title"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -581,8 +586,8 @@ impl LibraryStore {
         }
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-             FROM tracks WHERE {where_clause}
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+             FROM tracks_with_local WHERE {where_clause}
              ORDER BY track_number, title"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -693,8 +698,8 @@ impl LibraryStore {
     pub fn album_tracks(&self, album_artist: &str, album: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-                   FROM tracks WHERE album_artist = ?1 AND album = ?2
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+                   FROM tracks_with_local WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -712,8 +717,8 @@ impl LibraryStore {
     pub fn artist_tracks(&self, artist: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-                   FROM tracks WHERE artist = ?1
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+                   FROM tracks_with_local WHERE artist = ?1
                    ORDER BY album, track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -902,8 +907,8 @@ impl LibraryStore {
         let mut tracks = Vec::new();
         if let Ok(mut stmt) = conn.prepare(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
-             FROM tracks WHERE updated_at > ?1",
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
+             FROM tracks_with_local WHERE updated_at > ?1",
         )
             && let Ok(rows) = stmt.query(rusqlite::params![since]) {
                 tracks.extend(rows.mapped(row_to_track).flatten());
@@ -949,15 +954,30 @@ impl LibraryStore {
                 let genre_fold = text::fold(&track.genre);
                 let comment_fold = text::fold(&track.comment);
                 let _ = tx.execute(
-                    "INSERT OR REPLACE INTO tracks
-                        (id, path, title, artist, album_artist, album, genre, comment,
-                         title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
-                         track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+                    UPSERT_TRACK_SQL,
                     rusqlite::params![
-                        track.id, track.path, track.title, track.artist, track.album_artist, track.album, track.genre, track.comment,
-                        title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
-                        track.track_number, track.year, track.duration_secs, track.rating, track.play_count, track.last_played, track.file_mtime, track.updated_at
+                        track.id,
+                        track.path,
+                        track.title,
+                        track.artist,
+                        track.album_artist,
+                        track.album,
+                        track.genre,
+                        track.comment,
+                        title_fold,
+                        artist_fold,
+                        album_artist_fold,
+                        album_fold,
+                        genre_fold,
+                        comment_fold,
+                        track.track_number,
+                        track.year,
+                        track.duration_secs,
+                        track.rating,
+                        track.play_count,
+                        track.last_played,
+                        track.file_mtime,
+                        track.updated_at
                     ],
                 );
             } else {
@@ -997,6 +1017,37 @@ impl LibraryStore {
         }
 
         tx.commit().unwrap();
+    }
+
+    /// Resolves the first remote peer that holds a source for this track,
+    /// used to pick where to stream it from. `None` when no other instance
+    /// has a copy.
+    pub fn get_remote_source_peer(&self, logical_id: &str) -> Option<String> {
+        let conn = self.read_conn();
+        conn.query_row(
+            "SELECT instance_id FROM track_sources
+             WHERE logical_id = ?1
+               AND instance_id != (SELECT value FROM kv WHERE key = 'instance_id')
+             LIMIT 1",
+            rusqlite::params![logical_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    }
+
+    /// The local physical path for a logical id, used by the `/stream`
+    /// endpoint. `None` when this instance doesn't hold the file.
+    pub fn get_local_source_path(&self, logical_id: &str) -> Option<String> {
+        let conn = self.read_conn();
+        conn.query_row(
+            "SELECT path FROM track_sources
+             WHERE logical_id = ?1
+               AND instance_id = (SELECT value FROM kv WHERE key = 'instance_id')
+             LIMIT 1",
+            rusqlite::params![logical_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
     }
 }
 
@@ -1066,9 +1117,42 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         last_played: row.get(13)?,
         file_mtime: row.get::<_, i64>(14).unwrap_or(0),
         updated_at: row.get::<_, i64>(15).unwrap_or(0),
-        is_local: true, // TODO(net): Resolve against track_sources when syncing remote libraries
+        is_local: row.get::<_, bool>(16).unwrap_or(true),
     })
 }
+
+/// Upsert a full track row. `ON CONFLICT DO UPDATE` (rather than
+/// `INSERT OR REPLACE`) matters: a replace is a delete-then-insert, which
+/// cascades to `track_sources` and silently drops the physical sources of
+/// other instances.
+const UPSERT_TRACK_SQL: &str = "
+INSERT INTO tracks
+    (id, path, title, artist, album_artist, album, genre, comment,
+     title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
+     track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at)
+VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+ON CONFLICT(id) DO UPDATE SET
+    path = excluded.path,
+    title = excluded.title,
+    artist = excluded.artist,
+    album_artist = excluded.album_artist,
+    album = excluded.album,
+    genre = excluded.genre,
+    comment = excluded.comment,
+    title_fold = excluded.title_fold,
+    artist_fold = excluded.artist_fold,
+    album_artist_fold = excluded.album_artist_fold,
+    album_fold = excluded.album_fold,
+    genre_fold = excluded.genre_fold,
+    comment_fold = excluded.comment_fold,
+    track_number = excluded.track_number,
+    year = excluded.year,
+    duration_secs = excluded.duration_secs,
+    rating = excluded.rating,
+    play_count = excluded.play_count,
+    last_played = excluded.last_played,
+    file_mtime = excluded.file_mtime,
+    updated_at = excluded.updated_at";
 
 /// Add columns introduced after the initial schema. SQLite doesn't support
 /// `ADD COLUMN IF NOT EXISTS`, so we check `pragma_table_info` first.
@@ -1131,6 +1215,21 @@ fn migrate(conn: &Connection) {
     let _ = conn.execute("DROP INDEX IF EXISTS idx_tracks_sort", []);
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tracks_sort ON tracks(album_artist_fold, album_fold, track_number, title_fold)",
+        [],
+    );
+
+    // Dynamic view for source resolution: exposes `is_local` (does this
+    // instance own a physical copy of the track?) without repeating the
+    // JOIN in every track query.
+    let _ = conn.execute(
+        "CREATE VIEW IF NOT EXISTS tracks_with_local AS
+         SELECT t.*,
+                EXISTS(
+                    SELECT 1 FROM track_sources s
+                    WHERE s.logical_id = t.id
+                      AND s.instance_id = (SELECT value FROM kv WHERE key = 'instance_id')
+                ) AS is_local
+         FROM tracks t",
         [],
     );
 
@@ -1403,5 +1502,86 @@ mod tests {
             names,
             ["air", "Amadou et Mariam", "ATSUGÁ", "Stephan Bodzin"]
         );
+    }
+
+    #[test]
+    fn sync_conflict_resolution() {
+        let store = LibraryStore::open_memory().unwrap();
+        store
+            .upsert_track(&t("1", "So What", "Miles Davis", "Kind of Blue", 1959))
+            .unwrap();
+        let base = store.get_track("1").unwrap().updated_at;
+
+        // Peer reports a newer revision: remote metadata wins, and the peer's
+        // physical source is registered under its instance id.
+        let mut newer = t("1", "So What (Take 2)", "Miles Davis", "Kind of Blue", 1959);
+        newer.path = "/peer/so_what.flac".into();
+        newer.updated_at = base + 1000;
+        newer.last_played = Some(base + 500);
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![newer],
+                tombstones: vec![],
+            },
+        );
+
+        let got = store.get_track("1").unwrap();
+        assert_eq!(got.title, "So What (Take 2)");
+        assert_eq!(got.last_played, Some(base + 500));
+        assert!(got.is_local); // the local copy still exists
+        assert_eq!(store.get_remote_source_peer("1").as_deref(), Some("peer-1"));
+
+        // Peer reports an older revision with fresher play data: metadata is
+        // kept, play data is adopted (highest last_played wins).
+        let mut older = t("1", "Stale Title", "Miles Davis", "Kind of Blue", 1959);
+        older.path = "/peer/so_what.flac".into();
+        older.updated_at = base; // not newer than what we already have
+        older.last_played = Some(base + 900);
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![older],
+                tombstones: vec![],
+            },
+        );
+
+        let got = store.get_track("1").unwrap();
+        assert_eq!(got.title, "So What (Take 2)");
+        assert_eq!(got.last_played, Some(base + 900));
+    }
+
+    #[test]
+    fn sync_tombstones_drop_peer_sources() {
+        let store = LibraryStore::open_memory().unwrap();
+        let local = t("1", "So What", "Miles Davis", "Kind of Blue", 1959);
+        store.upsert_track(&local).unwrap();
+
+        // Peer syncs the same track: it gains a remote source.
+        let mut peer = t("1", "So What", "Miles Davis", "Kind of Blue", 1959);
+        peer.path = "/peer/so_what.flac".into();
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![peer],
+                tombstones: vec![],
+            },
+        );
+        assert_eq!(store.get_remote_source_peer("1").as_deref(), Some("peer-1"));
+
+        // Peer deletes the file: the tombstone drops only the peer's source.
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![],
+                tombstones: vec!["1".into()],
+            },
+        );
+        assert_eq!(store.get_remote_source_peer("1"), None);
+
+        // The local copy is untouched: track and local source survive.
+        let got = store.get_track("1").unwrap();
+        assert!(got.is_local);
+        assert_eq!(store.get_local_source_path("1"), Some(local.path));
     }
 }
