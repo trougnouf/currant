@@ -36,7 +36,21 @@ CREATE TABLE IF NOT EXISTS tracks (
     rating        INTEGER NOT NULL DEFAULT 0,
     play_count    INTEGER NOT NULL DEFAULT 0,
     last_played   INTEGER,
-    file_mtime    INTEGER NOT NULL DEFAULT 0
+    file_mtime    INTEGER NOT NULL DEFAULT 0,
+    updated_at    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS track_sources (
+    logical_id TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    format_tier INTEGER NOT NULL,
+    file_mtime INTEGER NOT NULL,
+    PRIMARY KEY (logical_id, instance_id, path),
+    FOREIGN KEY (logical_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS tombstones (
+    logical_id TEXT PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
@@ -133,6 +147,35 @@ impl LibraryStore {
         self.conn.lock().unwrap()
     }
 
+    /// The local instance's stable mesh identity. Generated once and cached in
+    /// the `kv` table so it survives restarts.
+    pub fn local_instance_id(&self) -> String {
+        let conn = self.write_conn();
+        Self::instance_id_on(&conn)
+    }
+
+    /// Resolve (or create) the instance id on an already-open connection.
+    /// Kept separate from [`Self::local_instance_id`] so callers that already
+    /// hold the write lock (e.g. [`Self::upsert_track`]) can reuse it without
+    /// re-locking the non-reentrant mutex.
+    fn instance_id_on(conn: &Connection) -> String {
+        let id: Option<String> = conn
+            .query_row("SELECT value FROM kv WHERE key = 'instance_id'", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        if let Some(id) = id {
+            id
+        } else {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let _ = conn.execute(
+                "INSERT INTO kv (key, value) VALUES ('instance_id', ?1)",
+                rusqlite::params![&new_id],
+            );
+            new_id
+        }
+    }
+
     /// Insert or replace a track, preserving user-managed mutable columns
     /// (rating, play_count, last_played) when the file has not changed.
     pub fn upsert_track(&self, track: &Track) -> rusqlite::Result<()> {
@@ -155,12 +198,13 @@ impl LibraryStore {
         let album_fold = text::fold(&track.album);
         let genre_fold = text::fold(&track.genre);
         let comment_fold = text::fold(&track.comment);
+        let now = unix_now();
         conn.execute(
             "INSERT OR REPLACE INTO tracks
                 (id, path, title, artist, album_artist, album, genre, comment,
                  title_fold, artist_fold, album_artist_fold, album_fold, genre_fold, comment_fold,
-                 track_number, year, duration_secs, rating, play_count, last_played, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                 track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
             rusqlite::params![
                 track.id,
                 track.path,
@@ -183,8 +227,27 @@ impl LibraryStore {
                 play_count,
                 last_played,
                 track.file_mtime,
+                now,
             ],
         )?;
+
+        let instance_id = Self::instance_id_on(&conn);
+        let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
+            1
+        } else {
+            0
+        };
+        conn.execute(
+            "INSERT OR REPLACE INTO track_sources (logical_id, instance_id, path, format_tier, file_mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                track.id,
+                instance_id,
+                track.path,
+                format_tier,
+                track.file_mtime,
+            ],
+        )?;
+
         Ok(())
     }
 
@@ -192,7 +255,7 @@ impl LibraryStore {
         let conn = self.read_conn();
         conn.query_row(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
              FROM tracks WHERE id = ?1",
             rusqlite::params![id],
             row_to_track,
@@ -345,7 +408,7 @@ impl LibraryStore {
 
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                    track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
              FROM tracks {where_sql}
              ORDER BY {order}
              LIMIT ? OFFSET ?"
@@ -457,7 +520,7 @@ impl LibraryStore {
         }
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
              FROM tracks WHERE {track_where}
              ORDER BY track_number, title"
         );
@@ -502,7 +565,7 @@ impl LibraryStore {
         }
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
              FROM tracks WHERE {where_clause}
              ORDER BY track_number, title"
         );
@@ -614,7 +677,7 @@ impl LibraryStore {
     pub fn album_tracks(&self, album_artist: &str, album: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
                    FROM tracks WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
@@ -633,7 +696,7 @@ impl LibraryStore {
     pub fn artist_tracks(&self, artist: &str) -> Vec<Track> {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
-                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime
+                          track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at
                    FROM tracks WHERE artist = ?1
                    ORDER BY album, track_number, title";
         let mut stmt = match conn.prepare(sql) {
@@ -868,6 +931,8 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         play_count: row.get::<_, i64>(12).unwrap_or(0) as u32,
         last_played: row.get(13)?,
         file_mtime: row.get::<_, i64>(14).unwrap_or(0),
+        updated_at: row.get::<_, i64>(15).unwrap_or(0),
+        is_local: true, // TODO(net): Resolve against track_sources when syncing remote libraries
     })
 }
 
@@ -934,6 +999,86 @@ fn migrate(conn: &Connection) {
         "CREATE INDEX IF NOT EXISTS idx_tracks_sort ON tracks(album_artist_fold, album_fold, track_number, title_fold)",
         [],
     );
+
+    // Net-Mesh Migration
+    let has_updated_at: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = 'updated_at'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_updated_at {
+        let _ = conn.execute(
+            "ALTER TABLE tracks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS track_sources (
+                logical_id TEXT NOT NULL,
+                instance_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                format_tier INTEGER NOT NULL,
+                file_mtime INTEGER NOT NULL,
+                PRIMARY KEY (logical_id, instance_id, path),
+                FOREIGN KEY (logical_id) REFERENCES tracks(id) ON DELETE CASCADE
+            )",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS tombstones (
+                logical_id TEXT PRIMARY KEY,
+                deleted_at INTEGER NOT NULL
+            )",
+            [],
+        );
+
+        // Migrate physical path IDs to pure metadata hashes
+        let mut stmt = conn
+            .prepare("SELECT id, album_artist, album, track_number, title FROM tracks")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                let old_id: String = row.get(0)?;
+                let artist: String = row.get(1)?;
+                let album: String = row.get(2)?;
+                let track_no: u32 = row.get(3)?;
+                let title: String = row.get(4)?;
+                let new_id = crate::scanner::metadata_id(&artist, &album, track_no, &title);
+                Ok((old_id, new_id))
+            })
+            .unwrap()
+            .flatten()
+            .collect();
+        drop(stmt);
+
+        let _ = conn.execute_batch("BEGIN IMMEDIATE");
+        for (old_id, new_id) in rows {
+            if old_id == new_id {
+                continue;
+            }
+            let _ = conn.execute(
+                "UPDATE OR IGNORE tracks SET id = ?2 WHERE id = ?1",
+                rusqlite::params![&old_id, &new_id],
+            );
+            let _ = conn.execute(
+                "DELETE FROM tracks WHERE id = ?1",
+                rusqlite::params![&old_id],
+            );
+        }
+        let _ = conn.execute_batch("COMMIT");
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -959,6 +1104,8 @@ mod tests {
             play_count: 0,
             last_played: None,
             file_mtime: 0,
+            updated_at: 0,
+            is_local: true,
         }
     }
 

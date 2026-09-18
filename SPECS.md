@@ -254,7 +254,49 @@ A `currant-daemon` process (like cfait's `cfait daemon`) would own the `PlayerCo
 Android does not use the control socket. The app owns `PlayerController` in-process (via uniffi) and exposes remote control through Android's MediaSession API (notification, lock screen, Bluetooth, `adb shell`).
 
 
-## 8. Future work
+## 8. Networking & Mesh Audio (Currant-Net)
+
+Currant instances operate as peers in a decentralized mesh. An instance dynamically assumes any combination of three roles: **Library Provider** (shares files), **Playback Target** (owns a queue and outputs audio), and **Controller** (UI).
+
+### 8.1. Unified Topology & Discovery
+*   **Identity:** On first launch, each instance generates a UUID `instance_id` stored in the `kv` table.
+*   **Discovery (mDNS):** Instances automatically discover each other on the local network via Zeroconf/mDNS.
+*   **Protocol:** Every instance runs a lightweight HTTP server.
+    *   `/ws` - WebSocket endpoint for JSON command/state sync (`PlayerIntent` and `ControlResponse`).
+    *   `/stream/:logical_id` - HTTP endpoint for media streaming (supports `Range` requests).
+    *   `/sync` - HTTP endpoint for exchanging catalog deltas.
+*   **Authentication:** Devices are paired via a shared 128-bit pairing token. Unpaired requests are rejected.
+
+### 8.2. Global Catalog & Smart Deduplication
+To avoid transferring files that already exist locally (regardless of folder structures), Currant deduplicates tracks using metadata hashes.
+*   **Logical IDs:** The core `tracks` table represents *Logical Tracks*. Its `id` is the FNV-1a hash of the folded metadata (`album_artist + album + track_number + title`).
+*   **Physical Sources:** A new `track_sources` table maps `logical_id -> (instance_id, full_path, format_tier)`. `format_tier` distinguishes Lossless (FLAC/WAV) from Lossy (Opus/OGG/MP3).
+*   **Source Resolution Priority:** When a Playback Target requests a track, it picks the optimal physical source based on a new setting `prefer_remote_lossy` (default: `true`):
+    1.  **Local Source Available:** Always play local. Zero network transfer. (Lossless > Lossy).
+    2.  **Only Remote Sources Available:**
+        *   If `prefer_remote_lossy` is `true`: Remote Lossy > Remote Lossless (minimizes bandwidth).
+        *   If `prefer_remote_lossy` is `false`: Remote Lossless > Remote Lossy.
+
+### 8.3. Strict Delta Synchronization
+To guarantee minimal data transfer, the SQLite database is **never** transferred whole. Syncs use High-Water Mark (HWM) timestamping.
+*   **Timestamps:** The `tracks` table tracks modifications via `updated_at`.
+*   **Tombstones:** A new `tombstones` table tracks `(logical_id, deleted_at)` when tracks are removed.
+*   **Delta Sync Payload:** When Node A connects to Node B, it requests `GET /sync?since=<last_sync_timestamp>`. Node B returns a compact JSON payload containing *only* the tracks modified/added, and the IDs deleted, since that exact timestamp.
+*   **Conflict Resolution:** For user data (`rating`, `play_count`), the highest `last_played` timestamp wins, ensuring offline plays sync safely across devices.
+
+### 8.4. Playback Targets & Zones
+*   The `PlayerController` state (Queue, Now Playing, Volume) belongs to the **Playback Target**.
+*   **Independent Queues:** A PC and a Phone maintain independent queues by default.
+*   **Remote Control:** The UI can switch its active "Zone". If the Phone selects the PC Zone, the Phone UI forwards all `PlayerIntent` keypresses over WebSocket to the PC.
+*   **Zone Handoff:** A new `PlayerIntent::TransferZone { to_instance }` intent moves the current track, exact millisecond position, and queue to the new target, pausing the sender seamlessly.
+*   **Scrobbling:** Only the active Playback Target executes scrobbles, preventing duplicated API calls.
+
+### 8.5. Audio Streaming & UI Indicators
+*   **Pull-based HTTP:** Streaming is handled via `GET /stream/:logical_id`. The responding node streams the file using `Accept-Ranges: bytes`.
+*   **Decoding:** The consuming node wraps the HTTP stream in a seekable reader. *(Note: The custom `opus.rs` decoder must be updated to stream chunks rather than decoding the full file into memory upfront).*
+*   **UI Hint:** In the TUI, tracks without a local source (requiring network streaming) are prefixed with a network symbol (e.g., `~`) indicating playback will consume Wi-Fi/mobile bandwidth.
+
+## 9. Future work
 
 Not yet implemented, listed for priority tracking:
 
@@ -262,25 +304,3 @@ Not yet implemented, listed for priority tracking:
 *   Last.fm scrobbler
 *   "Send tracks" (Android share intent + desktop)
 *   Gapless playback
-
-## 9. Networking & Remote Control
-
-Currant instances seamlessly connect, share libraries, and control each other over a local network. All networking is unified under a single HTTP server port with a WebSocket upgrade for bidirectional control, ensuring firewall traversal and discovery (mDNS) are trivial. 
-
-### 9.1. Unified Protocol (HTTP & WebSockets)
-*   **Single Port:** A single bounded HTTP server (`tiny_http`) handles media streaming and delta syncs. 
-*   **WebSocket Control:** Clients upgrade a `GET /ws` endpoint into a persistent WebSocket connection using `tungstenite`. This handles the bidirectional flow of `PlayerIntent` and `ControlResponse` payloads seamlessly without raw TCP framing issues.
-*   **Authentication:** Clients connect via a 128-bit Token. The host TUI renders a QR code for seamless Android pairing.
-
-### 9.2. Shared Queue & Control
-*   **State Sync:** The host pushes a `ControlResponse` JSON payload over the WebSocket whenever the `PlayerController` state changes.
-*   **Intent Forwarding:** Clients send `PlayerIntent` payloads over the WebSocket. The host applies them to its controller, triggering an immediate broadcast so all UIs stay perfectly in sync.
-
-### 9.3. Remote Library Access (Relative Paths & Delta Sync)
-*   **Deterministic IDs:** To support libraries synchronized across devices (e.g., via Syncthing), `Track.id` is hashed from the track's **relative path**, not its absolute path.
-*   **Zero-Latency UI:** Clients maintain a local SQLite replica. UI queries are instantaneous and execute against the local Rust core.
-*   **Timestamp Delta Sync:** The host's `tracks` table includes an `updated_at` timestamp, and a `tombstones` table tracks deletions `(id, deleted_at)`. On connect, clients request `GET /sync?since=TIMESTAMP`. The host returns a JSON payload of `{ updated: [Track], deleted: [String] }` which the client merges, perfectly reconciling offline listens, play counts, and removed files using mere kilobytes.
-
-### 9.4. Audio Streaming & Casting (Pull-Based)
-*   **Remote Library, Local Speaker:** The host serves audio via `GET /stream/:id`. The client core intercepts file paths and wraps them in an `HttpSeekableReader` (translating `seek()` to HTTP `Range` requests), allowing decoders (`symphonia`) to natively read headers and seek seamlessly.
-*   **Local Library, Remote Speaker (Casting):** Because push-based chunked streaming breaks decoders that need to seek/read file headers, casting is pull-based. The Android app spins up a lightweight `tiny_http` server in its Foreground Service and sends a `PlayerIntent::PlayStream { url }` intent. The host fetches and decodes it identically to remote playback.

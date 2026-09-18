@@ -220,7 +220,7 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
     let duration_secs = properties.duration().as_secs() as u32;
 
     Ok(Track {
-        id: path_id(path),
+        id: metadata_id(&album_artist, &album, track_number, &title),
         path: path.to_string_lossy().to_string(),
         title,
         artist,
@@ -235,13 +235,23 @@ fn read_track(path: &Path, mtime: i64) -> Result<Track, ()> {
         play_count,
         last_played: None,
         file_mtime: mtime,
+        updated_at: 0,
+        is_local: true,
     })
 }
 
-/// A stable, deterministic id for a file: FNV-1a 64-bit of the canonical path.
-pub fn path_id(path: &Path) -> String {
+/// A stable, deterministic id for a track based on its metadata.
+/// This guarantees cross-device deduplication even if folder structures differ.
+pub fn metadata_id(album_artist: &str, album: &str, track_number: u32, title: &str) -> String {
+    let s = format!(
+        "{}|{}|{}|{}",
+        crate::text::fold(album_artist),
+        crate::text::fold(album),
+        track_number,
+        crate::text::fold(title)
+    );
     let mut h: u64 = 0xcbf29ce484222325;
-    for &b in path.to_string_lossy().as_bytes() {
+    for &b in s.as_bytes() {
         h ^= b as u64;
         h = h.wrapping_mul(0x100000001b3);
     }

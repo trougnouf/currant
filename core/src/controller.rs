@@ -475,6 +475,8 @@ mod tests {
                 play_count: 0,
                 last_played: None,
                 file_mtime: 0,
+                updated_at: 0,
+                is_local: true,
             };
             store.upsert_track(&track).unwrap();
         }
@@ -643,6 +645,8 @@ mod tests {
                     play_count: 0,
                     last_played: None,
                     file_mtime: 0,
+                    updated_at: 0,
+                    is_local: true,
                 })
                 .unwrap();
         }
@@ -706,6 +710,8 @@ mod tests {
                     play_count: 0,
                     last_played: None,
                     file_mtime: 0,
+                    updated_at: 0,
+                    is_local: true,
                 })
                 .unwrap();
         }

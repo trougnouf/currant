@@ -405,6 +405,8 @@ pub struct App {
     pub watcher_tx: Option<std::sync::mpsc::Sender<Vec<String>>>,
     pub watcher_progress_rx: Option<std::sync::mpsc::Receiver<Arc<ScanProgress>>>,
 
+    pub network_state: Option<Arc<std::sync::Mutex<currant_core::net::NetworkState>>>,
+
     dirty: bool,
 
     /// ListState offset for the currently visible list (relative to the
@@ -472,6 +474,7 @@ impl App {
             live_columns: false,
             watcher_tx: None,
             watcher_progress_rx: None,
+            network_state: None,
         }
     }
 

@@ -343,9 +343,17 @@ fn track_line<'a>(
     cols: &ColumnWidths,
     width: usize,
 ) -> Line<'a> {
-    let playing_marker = if playing { ">" } else { " " };
+    let playing_marker = if playing {
+        ">"
+    } else if !t.is_local {
+        "~"
+    } else {
+        " "
+    };
     let playing_style = if playing {
         Style::default().fg(theme::NOW_PLAYING).bold()
+    } else if !t.is_local {
+        Style::default().fg(theme::HINT)
     } else {
         Style::default()
     };

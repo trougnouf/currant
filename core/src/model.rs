@@ -28,6 +28,11 @@ pub struct Track {
 
     /// File mtime (unix seconds) used for incremental rescans.
     pub file_mtime: i64,
+    /// Last modified timestamp used for delta synchronization.
+    pub updated_at: i64,
+    /// UI hint indicating whether a local physical source exists.
+    #[serde(default)]
+    pub is_local: bool,
 }
 
 /// A searchable library field. `All` is the free-text fallback that

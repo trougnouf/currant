@@ -6,6 +6,7 @@ pub mod controller;
 pub mod matcher;
 pub mod metadata;
 pub mod model;
+pub mod net;
 pub mod scanner;
 pub mod scrobble;
 pub mod store;

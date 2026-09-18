@@ -85,6 +85,11 @@ fn catalog_path() -> std::path::PathBuf {
 fn main() -> Result<(), io::Error> {
     let store =
         Arc::new(LibraryStore::open(&catalog_path()).expect("failed to open library catalog"));
+
+    // Boot up the Mesh Networking Daemon
+    let local_instance_id = store.local_instance_id();
+    let network_state = currant_core::net::start_network(local_instance_id);
+
     let mut controller = PlayerController::new(store.clone());
 
     // Restore the previous session's queue and volume, then rescan (incremental).
@@ -139,6 +144,7 @@ fn main() -> Result<(), io::Error> {
 
     let mut app = App::new();
     app.watcher_tx = Some(watcher_tx);
+    app.network_state = Some(network_state);
     app.watcher_progress_rx = Some(progress_rx);
     app.set_scan_progress(progress);
     app.set_playback(playback);
