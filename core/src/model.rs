@@ -200,6 +200,8 @@ pub enum PlayerIntent {
     SkipAlbum,
     StopAfter { id: String },
     SetVolume { volume: f32 },
+    SeekTo { position_ms: u64 },
+    TransferZone { to_instance: String },
 
     // Metadata
     RateTrack { id: String, rating: u8 },

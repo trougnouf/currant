@@ -28,6 +28,8 @@ souvlaki = "0.8"
 notify = "8"
 # Read ReplayGain tags at playback time.
 lofty = "0.25"
+# WebSocket client for remote zone control (talks to a peer's /ws endpoint).
+tungstenite = "0.30.0"
 
 [features]
 default = ["opus"]

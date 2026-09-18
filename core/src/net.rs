@@ -28,7 +28,10 @@ pub struct NetworkState {
 }
 
 /// Spawns the HTTP server, WebSocket server, and mDNS daemon on background threads.
-pub fn start_network(store: Arc<crate::store::LibraryStore>) -> Arc<Mutex<NetworkState>> {
+pub fn start_network(
+    store: Arc<crate::store::LibraryStore>,
+    controller: Arc<Mutex<crate::controller::PlayerController>>,
+) -> Arc<Mutex<NetworkState>> {
     let local_instance_id = store.local_instance_id();
     let state = Arc::new(Mutex::new(NetworkState {
         peers: HashMap::new(),
@@ -78,15 +81,43 @@ pub fn start_network(store: Arc<crate::store::LibraryStore>) -> Arc<Mutex<Networ
     let ws_listener = TcpListener::bind("0.0.0.0:0").expect("Failed to bind WS server");
     let ws_port = ws_listener.local_addr().unwrap().port();
 
+    let ws_controller = controller.clone();
     thread::spawn(move || {
         for stream in ws_listener.incoming().flatten() {
+            let c = ws_controller.clone();
             thread::spawn(move || {
                 if let Ok(mut websocket) = accept(stream) {
-                    // TODO(net): Handle incoming PlayerIntents
                     loop {
-                        // Keep connection alive, drop if read fails
-                        if websocket.read().is_err() {
-                            break;
+                        match websocket.read() {
+                            Ok(tungstenite::Message::Text(text)) => {
+                                if let Ok(req) =
+                                    serde_json::from_str::<crate::control::ControlRequest>(&text)
+                                {
+                                    // Build the reply under the lock, write it
+                                    // once released (mirrors control.rs).
+                                    let json = {
+                                        let mut ctrl = c.lock().unwrap();
+                                        if let crate::control::ControlRequest::Intent { intent } =
+                                            req
+                                        {
+                                            ctrl.dispatch(intent);
+                                        }
+                                        let resp = crate::control::ControlResponse {
+                                            is_playing: ctrl.is_playing,
+                                            volume: ctrl.volume,
+                                            current_track: ctrl.current_track_ref(),
+                                            queue: ctrl.queue_snapshot(),
+                                            error: None,
+                                        };
+                                        serde_json::to_string(&resp).ok()
+                                    };
+                                    if let Some(json) = json {
+                                        let _ = websocket.write(tungstenite::Message::text(json));
+                                    }
+                                }
+                            }
+                            Ok(tungstenite::Message::Close(_)) | Err(_) => break,
+                            _ => {}
                         }
                     }
                 }

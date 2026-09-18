@@ -9,6 +9,7 @@ mod control;
 #[cfg(feature = "opus")]
 mod opus;
 mod ui;
+mod zone;
 
 use app::App;
 use crossterm::{
@@ -86,23 +87,26 @@ fn main() -> Result<(), io::Error> {
     let store =
         Arc::new(LibraryStore::open(&catalog_path()).expect("failed to open library catalog"));
 
-    // Boot up the Mesh Networking Daemon
-    let network_state = currant_core::net::start_network(store.clone());
+    let controller = Arc::new(Mutex::new(PlayerController::new(store.clone())));
 
-    let mut controller = PlayerController::new(store.clone());
+    // Boot up the Mesh Networking Daemon
+    let network_state = currant_core::net::start_network(store.clone(), controller.clone());
 
     // Restore the previous session's queue and volume, then rescan (incremental).
     if let Some(snap) = store.load_queue_snapshot() {
-        controller.restore_queue(snap);
+        controller.lock().unwrap().restore_queue(snap);
     }
     if let Some(v) = store.load_volume() {
-        controller.volume = v;
+        controller.lock().unwrap().volume = v;
     }
 
     // Wire the scrobbler if a token is configured (empty = disabled).
     let token = store.load_scrobble_token();
     if !token.is_empty() {
-        controller.set_scrobbler(Arc::new(ListenbrainzScrobbler::new(token)));
+        controller
+            .lock()
+            .unwrap()
+            .set_scrobbler(Arc::new(ListenbrainzScrobbler::new(token)));
     }
 
     let roots = store.load_roots();
@@ -129,6 +133,9 @@ fn main() -> Result<(), io::Error> {
     // Directory watching: the watcher thread rescans when files change.
     let (watcher_tx, watcher_rx) = std::sync::mpsc::channel();
     let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+    let (zone_tx, zone_rx) = std::sync::mpsc::channel();
+    let remote_state = Arc::new(Mutex::new(None));
+    zone::spawn(zone_rx, remote_state.clone());
     let _ = watcher_tx.send(if store.load_watch_roots() {
         roots.clone()
     } else {
@@ -136,7 +143,6 @@ fn main() -> Result<(), io::Error> {
     });
     spawn_watcher(store.clone(), watcher_rx, progress_tx);
 
-    let controller = Arc::new(Mutex::new(controller));
     let playback = Arc::new(audio::PlaybackState::new());
     crate::audio::spawn(controller.clone(), playback.clone(), network_state.clone());
     crate::control::spawn(controller.clone());
@@ -144,6 +150,7 @@ fn main() -> Result<(), io::Error> {
     let mut app = App::new();
     app.watcher_tx = Some(watcher_tx);
     app.network_state = Some(network_state);
+    app.zone_tx = Some(zone_tx);
     app.watcher_progress_rx = Some(progress_rx);
     app.set_scan_progress(progress);
     app.set_playback(playback);

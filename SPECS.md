@@ -130,6 +130,8 @@ All frontends fire `PlayerIntent` into the controller:
 *   `JumpTo` — skip to a track already in the queue without clearing the rest. Tracks before it go to history.
 *   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `SkipAlbum`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off. `SkipAlbum` drops contiguous tracks of the current album from the queues and skips.
 *   `SetVolume` — 0.0 to 1.0, persisted.
+*   `SeekTo { position_ms }` — seek the current track to a position in milliseconds. Executed by the audio frontend (see 4.2); present so the wire protocol and every frontend share one intent vocabulary.
+*   `TransferZone { to_instance }` — hand off the active zone (current track, exact position, queue) to another instance, pausing the sender; see 8.4.
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
 *   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` / `MovePlaylist { id, up }` — smart playlist management. `MovePlaylist` reorders (swaps with neighbor), changing the `g1`-`g9` index mapping.
 *   `ScanLibrary` — set roots and trigger a scan.

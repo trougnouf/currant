@@ -302,6 +302,15 @@ impl PlayerController {
             PlayerIntent::SetVolume { volume } => {
                 self.volume = volume.clamp(0.0, 1.0);
             }
+            PlayerIntent::SeekTo { .. } => {
+                // Seeking is owned by the audio frontend (see `PlaybackState`);
+                // the core controller has no audio position to mutate. Present
+                // so the wire protocol and every frontend share one vocabulary.
+            }
+            PlayerIntent::TransferZone { .. } => {
+                // Zone handoff is a networking concern handled by the frontend
+                // (see SPECS 8.4); the core controller only tracks playback.
+            }
             PlayerIntent::RateTrack { id, rating } => {
                 let rating = rating.min(5);
                 self.store.update_rating(&id, rating);

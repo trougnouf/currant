@@ -407,6 +407,10 @@ pub struct App {
 
     pub network_state: Option<Arc<std::sync::Mutex<currant_core::net::NetworkState>>>,
 
+    /// Sender for the zone (remote-control) client thread. The UI uses it to
+    /// switch the active zone or forward intents to a remote Playback Target.
+    pub zone_tx: Option<std::sync::mpsc::Sender<crate::zone::ZoneCommand>>,
+
     dirty: bool,
 
     /// ListState offset for the currently visible list (relative to the
@@ -475,6 +479,7 @@ impl App {
             watcher_tx: None,
             watcher_progress_rx: None,
             network_state: None,
+            zone_tx: None,
         }
     }
 
