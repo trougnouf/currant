@@ -73,6 +73,10 @@ pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgres
     let existing = store.paths_with_mtime();
     let mut keep: HashSet<String> = HashSet::new();
 
+    let mut batch = Vec::new();
+    let mut batch_added = 0;
+    let mut batch_updated = 0;
+
     for root in roots {
         let root = Path::new(root);
         if !root.is_dir() {
@@ -103,23 +107,42 @@ pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgres
 
             match read_track(path, mtime) {
                 Ok(track) => {
-                    if store.upsert_track(&track).is_ok() {
-                        match prev {
-                            Some(_) => {
-                                progress.updated.fetch_add(1, Ordering::Relaxed);
-                            }
-                            None => {
-                                progress.added.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
+                    batch.push(track);
+                    if prev.is_some() {
+                        batch_updated += 1;
                     } else {
-                        progress.errors.fetch_add(1, Ordering::Relaxed);
+                        batch_added += 1;
+                    }
+
+                    if batch.len() >= 500 {
+                        if store.upsert_batch(&batch).is_ok() {
+                            progress.added.fetch_add(batch_added, Ordering::Relaxed);
+                            progress.updated.fetch_add(batch_updated, Ordering::Relaxed);
+                        } else {
+                            progress
+                                .errors
+                                .fetch_add(batch.len() as u64, Ordering::Relaxed);
+                        }
+                        batch.clear();
+                        batch_added = 0;
+                        batch_updated = 0;
                     }
                 }
                 Err(_) => {
                     progress.errors.fetch_add(1, Ordering::Relaxed);
                 }
             }
+        }
+    }
+
+    if !batch.is_empty() {
+        if store.upsert_batch(&batch).is_ok() {
+            progress.added.fetch_add(batch_added, Ordering::Relaxed);
+            progress.updated.fetch_add(batch_updated, Ordering::Relaxed);
+        } else {
+            progress
+                .errors
+                .fetch_add(batch.len() as u64, Ordering::Relaxed);
         }
     }
 

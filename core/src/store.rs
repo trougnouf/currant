@@ -103,6 +103,7 @@ pub struct LibraryStore {
     /// query the catalog while the scan thread writes without blocking.
     /// `None` for in-memory databases (tests).
     read_conn: Option<Mutex<Connection>>,
+    instance_id: String,
 }
 
 impl LibraryStore {
@@ -156,9 +157,11 @@ impl LibraryStore {
         read_conn.execute_batch(SCHEMA)?;
         register_fold(&read_conn)?;
 
+        let instance_id = Self::instance_id_on(&conn);
         Ok(Self {
             conn: Mutex::new(conn),
             read_conn: Some(Mutex::new(read_conn)),
+            instance_id,
         })
     }
 
@@ -167,9 +170,11 @@ impl LibraryStore {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
         register_fold(&conn)?;
+        let instance_id = Self::instance_id_on(&conn);
         Ok(Self {
             conn: Mutex::new(conn),
             read_conn: None,
+            instance_id,
         })
     }
 
@@ -190,14 +195,12 @@ impl LibraryStore {
     /// The local instance's stable mesh identity. Generated once and cached in
     /// the `kv` table so it survives restarts.
     pub fn local_instance_id(&self) -> String {
-        let conn = self.write_conn();
-        Self::instance_id_on(&conn)
+        self.instance_id.clone()
     }
 
     /// Resolve (or create) the instance id on an already-open connection.
-    /// Kept separate from [`Self::local_instance_id`] so callers that already
-    /// hold the write lock (e.g. [`Self::upsert_track`]) can reuse it without
-    /// re-locking the non-reentrant mutex.
+    /// Called once from the constructors, which cache the result on the
+    /// struct so the `kv` table is read at most once per process.
     fn instance_id_on(conn: &Connection) -> String {
         let id: Option<String> = conn
             .query_row("SELECT value FROM kv WHERE key = 'instance_id'", [], |r| {
@@ -214,6 +217,86 @@ impl LibraryStore {
             );
             new_id
         }
+    }
+
+    /// Insert or replace a track, preserving user-managed mutable columns
+    /// (rating, play_count, last_played) when the file has not changed.
+    /// Insert or replace multiple tracks in a single transaction. Drastically
+    /// improves performance during full scans.
+    pub fn upsert_batch(&self, tracks: &[Track]) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = unix_now();
+        let instance_id = self.instance_id.clone();
+
+        {
+            let mut stmt_preserve = tx.prepare_cached(
+                "SELECT rating, play_count, last_played FROM tracks WHERE id = ?1 AND file_mtime = ?2",
+            )?;
+            let mut stmt_track = tx.prepare_cached(UPSERT_TRACK_SQL)?;
+            let mut stmt_source = tx.prepare_cached(
+                "INSERT OR REPLACE INTO track_sources (logical_id, instance_id, path, format_tier, file_mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+
+            for track in tracks {
+                let preserved: Option<(u8, u32, Option<i64>)> = stmt_preserve
+                    .query_row(rusqlite::params![track.id, track.file_mtime], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })
+                    .optional()?;
+                let (rating, play_count, last_played) = match preserved {
+                    Some(r) => r,
+                    None => (track.rating, track.play_count, track.last_played),
+                };
+
+                let title_fold = text::fold(&track.title);
+                let artist_fold = text::fold(&track.artist);
+                let album_artist_fold = text::fold(&track.album_artist);
+                let album_fold = text::fold(&track.album);
+                let genre_fold = text::fold(&track.genre);
+                let comment_fold = text::fold(&track.comment);
+
+                stmt_track.execute(rusqlite::params![
+                    track.id,
+                    track.path,
+                    track.title,
+                    track.artist,
+                    track.album_artist,
+                    track.album,
+                    track.genre,
+                    track.comment,
+                    title_fold,
+                    artist_fold,
+                    album_artist_fold,
+                    album_fold,
+                    genre_fold,
+                    comment_fold,
+                    track.track_number,
+                    track.year,
+                    track.duration_secs,
+                    rating,
+                    play_count,
+                    last_played,
+                    track.file_mtime,
+                    now,
+                ])?;
+
+                let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
+                    1
+                } else {
+                    0
+                };
+                stmt_source.execute(rusqlite::params![
+                    track.id,
+                    instance_id,
+                    track.path,
+                    format_tier,
+                    track.file_mtime,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Insert or replace a track, preserving user-managed mutable columns
@@ -267,7 +350,7 @@ impl LibraryStore {
             ],
         )?;
 
-        let instance_id = Self::instance_id_on(&conn);
+        let instance_id = self.instance_id.clone();
         let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
             1
         } else {

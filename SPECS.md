@@ -20,7 +20,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 *   **LibraryStore** — embedded SQLite (WAL mode). Source of truth for the catalog. Two connections: one read-only (queries never block on writes), one for mutations.
 *   **PlayerController** — owns the live queue (in memory). Receives `PlayerIntent`s from frontends, applies state mutations, queries the store. Queue is snapshotted to the store on exit and restored on startup.
 *   **Audio backend** — frontend-owned. The TUI spawns a thread that polls the controller's `current_track` and `is_playing` fields, decodes the file, and feeds rodio. When `current_track` is `None` and `is_playing` is true, the audio thread calls `determine_next_track()` to pull from the queue.
-*   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. Prunes removed files in a single transaction.
+*   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. New and changed tracks are upserted in batches of 500 inside a single transaction, so a full scan commits one fsync per batch instead of per track. Prunes removed files in a single transaction.
 *   **Directory watcher** — an optional background thread using `notify` monitors root directories for changes. Updates are debounced and fed into the incremental scanner, keeping the UI in sync without manual rescans.
 *   **Control socket & MPRIS** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/currant.sock`, mode 0600) for `currant-ctl`. Currant also implements MPRIS (Linux), SMTC (Windows), and Media Remote (macOS) using `souvlaki` for OS desktop integration (lock screen, tray icon, media keys).
 
@@ -264,7 +264,7 @@ Android does not use the control socket. The app owns `PlayerController` in-proc
 Currant instances operate as peers in a decentralized mesh. An instance dynamically assumes any combination of three roles: **Library Provider** (shares files), **Playback Target** (owns a queue and outputs audio), and **Controller** (UI).
 
 ### 8.1. Unified Topology & Discovery
-*   **Identity:** On first launch, each instance generates a UUID `instance_id` stored in the `kv` table.
+*   **Identity:** On first launch, each instance generates a UUID `instance_id` stored in the `kv` table and cached in memory for the life of the process.
 *   **Discovery (mDNS):** Instances automatically discover each other on the local network via Zeroconf/mDNS.
 *   **Protocol:** Every instance runs a lightweight HTTP server.
     *   `/ws` - WebSocket endpoint for JSON command/state sync (`PlayerIntent` and `ControlResponse`).
