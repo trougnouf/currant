@@ -11,7 +11,8 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tiny_http::{Header, Response, Server, StatusCode};
-use tungstenite::accept;
+use tungstenite::accept_hdr;
+use tungstenite::handshake::server::{Request, Response as WsResponse};
 
 pub const SERVICE_TYPE: &str = "_currant._tcp.local.";
 
@@ -49,6 +50,17 @@ pub fn start_network(
     let http_store = store.clone();
     thread::spawn(move || {
         for request in http_server.incoming_requests() {
+            let expected_auth = format!("Bearer {}", http_store.load_pairing_token());
+            let req_auth = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str());
+            if req_auth != Some(expected_auth.as_str()) {
+                let _ = request.respond(Response::empty(401));
+                continue;
+            }
+
             if request.url().starts_with("/sync") {
                 let since = request
                     .url()
@@ -86,7 +98,29 @@ pub fn start_network(
         for stream in ws_listener.incoming().flatten() {
             let c = ws_controller.clone();
             thread::spawn(move || {
-                if let Ok(mut websocket) = accept(stream) {
+                let c_for_cb = c.clone();
+                // The callback's error type is the HTTP response itself
+                // (tungstenite writes it back to the client), so it cannot be
+                // boxed.
+                #[allow(clippy::result_large_err)]
+                let callback = |req: &Request, response: WsResponse| {
+                    let expected = format!(
+                        "Bearer {}",
+                        c_for_cb.lock().unwrap().store.load_pairing_token()
+                    );
+                    let auth = req
+                        .headers()
+                        .get("Authorization")
+                        .and_then(|h| h.to_str().ok());
+                    if auth == Some(&expected) {
+                        Ok(response)
+                    } else {
+                        let mut err = tungstenite::http::Response::new(None);
+                        *err.status_mut() = tungstenite::http::StatusCode::UNAUTHORIZED;
+                        Err(err)
+                    }
+                };
+                if let Ok(mut websocket) = accept_hdr(stream, callback) {
                     loop {
                         match websocket.read() {
                             Ok(tungstenite::Message::Text(text)) => {
@@ -210,8 +244,12 @@ pub fn start_network(
                         let peer_id = id.to_string();
                         thread::spawn(move || {
                             let since = sync_store.get_last_sync(&peer_id);
+                            let token = sync_store.load_pairing_token();
                             let url = format!("http://{ip}:{http_p}/sync?since={since}");
-                            if let Ok(mut response) = agent.get(&url).call()
+                            if let Ok(mut response) = agent
+                                .get(&url)
+                                .header("Authorization", &format!("Bearer {token}"))
+                                .call()
                                 && let Ok(payload) =
                                     response.body_mut().read_json::<crate::model::SyncPayload>()
                             {

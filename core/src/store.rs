@@ -1000,6 +1000,18 @@ impl LibraryStore {
         self.kv_get("scrobble_token").unwrap_or_default()
     }
 
+    pub fn save_pairing_token(&self, token: &str) {
+        self.kv_set("pairing_token", token);
+    }
+
+    pub fn load_pairing_token(&self) -> String {
+        self.kv_get("pairing_token").unwrap_or_else(|| {
+            let t = uuid::Uuid::new_v4().to_string();
+            self.kv_set("pairing_token", &t);
+            t
+        })
+    }
+
     // --- mesh delta synchronization ---
 
     /// High-water mark (unix seconds) of the last completed sync from a peer.

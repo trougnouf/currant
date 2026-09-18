@@ -135,7 +135,7 @@ fn main() -> Result<(), io::Error> {
     let (progress_tx, progress_rx) = std::sync::mpsc::channel();
     let (zone_tx, zone_rx) = std::sync::mpsc::channel();
     let remote_state = Arc::new(Mutex::new(None));
-    zone::spawn(zone_rx, remote_state.clone());
+    zone::spawn(zone_rx, remote_state.clone(), store.clone());
     let _ = watcher_tx.send(if store.load_watch_roots() {
         roots.clone()
     } else {

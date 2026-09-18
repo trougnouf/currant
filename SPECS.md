@@ -63,7 +63,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 
 ### 2.3. Key/value store
 
-The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled), `schema_version` (integer).
+The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled), `pairing_token` (string, UUID generated on first launch), `schema_version` (integer).
 
 On open, the store compares the stored `schema_version` against the current one. If it is older, the library tables (`tracks`, `track_sources`, `tombstones`, `tracks_with_local`) are dropped and the version bumped, forcing a fresh scan. The `kv` table is never touched, so user settings (roots, volume, token, playlists) survive the wipe. This guarantees deduplication correctness across breaking catalog changes (e.g. the switch from physical-path to metadata track IDs).
 
@@ -214,10 +214,11 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 
 ### 6.4. Settings pane
 
-Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, the default volume, and the replaygain, watch-roots, and live-columns toggles. `Up`/`Down` move the selection; `Enter` or `Space` toggles a bool row, or edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
+Opened with `o` as a centered overlay. It lists the editable settings as rows: one row per scan root, an "+ add" row, the Listenbrainz token, the mesh pairing token, the default volume, and the replaygain, watch-roots, and live-columns toggles. `Up`/`Down` move the selection; `Enter` or `Space` toggles a bool row, or edits the selected row (an input line appears); `x` removes the selected scan root; `Esc` cancels an edit, or — when not editing — saves and closes.
 
 *   **Scan roots** — the directories the scanner walks. Editing a root replaces it; `x` (or an empty value) removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
 *   **Listenbrainz token** — the API token for scrobbling. Saving re-wires the scrobbler live (empty disables it).
+*   **Mesh pairing token** — the shared secret that authorizes peers on the local network (see §8.1). Generated on first launch; copy it to other devices to merge meshes. Saving takes effect immediately because the network layer reads the token from the store on every request and connection attempt.
 *   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
 *   **ReplayGain** — (default off) normalizes volume based on ReplayGain tags.
 *   **Watch roots** — (default off) monitors scan roots for file system changes and auto-rescans.
@@ -270,7 +271,7 @@ Currant instances operate as peers in a decentralized mesh. An instance dynamica
     *   `/ws` - WebSocket endpoint for JSON command/state sync (`PlayerIntent` and `ControlResponse`).
     *   `/stream/:logical_id` - HTTP endpoint for media streaming (supports `Range` requests).
     *   `/sync` - HTTP endpoint for exchanging catalog deltas.
-*   **Authentication:** Devices are paired via a shared 128-bit pairing token. Unpaired requests are rejected.
+*   **Authentication:** Devices are paired via a shared 128-bit pairing token, generated on first launch and stored in `kv` (`pairing_token`); it is viewable and editable in the settings pane. Every incoming HTTP request (`/sync`, `/stream`) and WebSocket upgrade must carry an `Authorization: Bearer <token>` header matching the local token, otherwise the server rejects the request (401). Every outbound request (`/sync` pull, `/stream` read, `/ws` dial) attaches the local token. The token is read from the store on each request/connection attempt, so rotating it in the settings pane takes effect immediately without a restart.
 
 ### 8.2. Global Catalog & Smart Deduplication
 To avoid transferring files that already exist locally (regardless of folder structures), Currant deduplicates tracks using metadata hashes.

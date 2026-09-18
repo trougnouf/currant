@@ -79,7 +79,9 @@ fn open_source(
                 state.peers.get(&peer_id)?.clone()
             };
             let url = format!("http://{}:{}/stream/{}", peer.ip, peer.http_port, track.id);
-            Some(Box::new(HttpSeekableReader::new(&url).ok()?))
+            Some(Box::new(
+                HttpSeekableReader::new(&url, store.load_pairing_token()).ok()?,
+            ))
         }
     };
 

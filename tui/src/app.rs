@@ -119,6 +119,8 @@ pub enum SettingsField {
     AddRoot,
     /// The Listenbrainz scrobble token.
     Token,
+    /// The token used to authenticate peers on the local network.
+    PairingToken,
     /// The default volume (0-100).
     Volume,
     /// Apply ReplayGain tags.
@@ -137,6 +139,7 @@ pub struct SettingsPane {
     /// Roots as they were when the pane opened, to detect changes on save.
     orig_roots: Vec<String>,
     pub token: String,
+    pub pairing_token: String,
     pub volume: f32,
     pub replaygain: bool,
     pub watch_roots: bool,
@@ -150,6 +153,7 @@ impl SettingsPane {
     pub fn new(
         roots: Vec<String>,
         token: String,
+        pairing_token: String,
         volume: f32,
         replaygain: bool,
         watch_roots: bool,
@@ -159,6 +163,7 @@ impl SettingsPane {
             orig_roots: roots.clone(),
             roots,
             token,
+            pairing_token,
             volume,
             replaygain,
             watch_roots,
@@ -174,9 +179,9 @@ impl SettingsPane {
         self.roots != self.orig_roots
     }
 
-    /// Total number of rows: one per root, plus add-root, token, volume, replaygain, watch roots, live columns.
+    /// Total number of rows: one per root, plus add-root, token, pairing token, volume, replaygain, watch roots, live columns.
     pub fn field_count(&self) -> usize {
-        self.roots.len() + 6
+        self.roots.len() + 7
     }
 
     /// The field at row `i`, if any.
@@ -185,10 +190,11 @@ impl SettingsPane {
             i if i < self.roots.len() => Some(SettingsField::Root(i)),
             i if i == self.roots.len() => Some(SettingsField::AddRoot),
             i if i == self.roots.len() + 1 => Some(SettingsField::Token),
-            i if i == self.roots.len() + 2 => Some(SettingsField::Volume),
-            i if i == self.roots.len() + 3 => Some(SettingsField::ReplayGain),
-            i if i == self.roots.len() + 4 => Some(SettingsField::WatchRoots),
-            i if i == self.roots.len() + 5 => Some(SettingsField::LiveColumns),
+            i if i == self.roots.len() + 2 => Some(SettingsField::PairingToken),
+            i if i == self.roots.len() + 3 => Some(SettingsField::Volume),
+            i if i == self.roots.len() + 4 => Some(SettingsField::ReplayGain),
+            i if i == self.roots.len() + 5 => Some(SettingsField::WatchRoots),
+            i if i == self.roots.len() + 6 => Some(SettingsField::LiveColumns),
             _ => None,
         }
     }
@@ -202,6 +208,7 @@ impl SettingsPane {
             }
             SettingsField::AddRoot => ("scan root", "+ add".to_string()),
             SettingsField::Token => ("listenbrainz token", self.token.clone()),
+            SettingsField::PairingToken => ("mesh pairing token", self.pairing_token.clone()),
             SettingsField::Volume => (
                 "default volume",
                 format!("{:.0}%", (self.volume * 100.0).round()),
@@ -239,6 +246,7 @@ impl SettingsPane {
             SettingsField::Root(i) => self.roots.get(i).cloned().unwrap_or_default(),
             SettingsField::AddRoot => String::new(),
             SettingsField::Token => self.token.clone(),
+            SettingsField::PairingToken => self.pairing_token.clone(),
             SettingsField::Volume => format!("{:.0}", (self.volume * 100.0).round()),
             SettingsField::ReplayGain | SettingsField::WatchRoots | SettingsField::LiveColumns => {
                 String::new()
@@ -266,6 +274,9 @@ impl SettingsPane {
                 }
             }
             Some(SettingsField::Token) => self.token = self.edit_buf.trim().to_string(),
+            Some(SettingsField::PairingToken) => {
+                self.pairing_token = self.edit_buf.trim().to_string()
+            }
             Some(SettingsField::Volume) => {
                 if let Ok(v) = self.edit_buf.trim().parse::<f32>() {
                     self.volume = (v / 100.0).clamp(0.0, 1.0);
@@ -1717,12 +1728,14 @@ impl App {
             roots
         };
         let token = c.store.load_scrobble_token();
+        let pairing_token = c.store.load_pairing_token();
         let replaygain = c.store.load_replaygain();
         let watch_roots = c.store.load_watch_roots();
         let live_columns = c.store.load_live_columns();
         self.settings = Some(SettingsPane::new(
             roots,
             token,
+            pairing_token,
             c.volume,
             replaygain,
             watch_roots,
@@ -1820,6 +1833,7 @@ impl App {
             c.store.save_roots(&pane.roots);
         }
         c.store.save_scrobble_token(&pane.token);
+        c.store.save_pairing_token(&pane.pairing_token);
         c.store.save_volume(pane.volume);
         c.store.save_replaygain(pane.replaygain);
         c.store.save_watch_roots(pane.watch_roots);
@@ -2324,6 +2338,7 @@ mod tests {
         SettingsPane::new(
             vec!["/music".to_string(), "/more".to_string()],
             "token".to_string(),
+            "pairing".to_string(),
             0.8,
             false,
             false,
@@ -2334,17 +2349,18 @@ mod tests {
     #[test]
     fn field_layout() {
         let p = pane();
-        // 2 roots + add + token + volume + replaygain + watch + live = 8 rows.
-        assert_eq!(p.field_count(), 8);
+        // 2 roots + add + token + pairing + volume + replaygain + watch + live = 9 rows.
+        assert_eq!(p.field_count(), 9);
         assert_eq!(p.field_at(0), Some(SettingsField::Root(0)));
         assert_eq!(p.field_at(1), Some(SettingsField::Root(1)));
         assert_eq!(p.field_at(2), Some(SettingsField::AddRoot));
         assert_eq!(p.field_at(3), Some(SettingsField::Token));
-        assert_eq!(p.field_at(4), Some(SettingsField::Volume));
-        assert_eq!(p.field_at(5), Some(SettingsField::ReplayGain));
-        assert_eq!(p.field_at(6), Some(SettingsField::WatchRoots));
-        assert_eq!(p.field_at(7), Some(SettingsField::LiveColumns));
-        assert_eq!(p.field_at(8), None);
+        assert_eq!(p.field_at(4), Some(SettingsField::PairingToken));
+        assert_eq!(p.field_at(5), Some(SettingsField::Volume));
+        assert_eq!(p.field_at(6), Some(SettingsField::ReplayGain));
+        assert_eq!(p.field_at(7), Some(SettingsField::WatchRoots));
+        assert_eq!(p.field_at(8), Some(SettingsField::LiveColumns));
+        assert_eq!(p.field_at(9), None);
     }
 
     #[test]
@@ -2419,6 +2435,12 @@ mod tests {
         assert_eq!(p.token, "newtoken");
 
         p.selected = 4;
+        p.begin_edit(SettingsField::PairingToken);
+        p.edit_buf = "  mesh123  ".to_string();
+        p.commit_edit();
+        assert_eq!(p.pairing_token, "mesh123");
+
+        p.selected = 5;
         p.begin_edit(SettingsField::Volume);
         p.edit_buf = "150".to_string(); // clamped to 100
         p.commit_edit();

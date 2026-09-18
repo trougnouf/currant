@@ -20,6 +20,7 @@ impl<T: Read + Seek + Send + Sync + ?Sized> Seekable for T {}
 /// lifetimes inside the decoder, at the cost of a round trip per chunk.
 pub struct HttpSeekableReader {
     url: String,
+    token: String,
     agent: ureq::Agent,
     cursor: u64,
     /// Total length from the `HEAD` request. Zero when the peer didn't
@@ -30,7 +31,7 @@ pub struct HttpSeekableReader {
 impl HttpSeekableReader {
     /// Open the remote file at `url`. A `HEAD` request learns the total
     /// length; if it fails, the reader falls back to unbounded ranges.
-    pub fn new(url: &str) -> io::Result<Self> {
+    pub fn new(url: &str, token: String) -> io::Result<Self> {
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
                 .timeout_global(Some(Duration::from_secs(30)))
@@ -38,12 +39,14 @@ impl HttpSeekableReader {
         );
         let total = agent
             .head(url)
+            .header("Authorization", &format!("Bearer {}", token))
             .call()
             .ok()
             .and_then(|response| response.body().content_length())
             .unwrap_or(0);
         Ok(Self {
             url: url.to_string(),
+            token,
             agent,
             cursor: 0,
             total,
@@ -67,6 +70,7 @@ impl Read for HttpSeekableReader {
         let mut response = self
             .agent
             .get(&self.url)
+            .header("Authorization", &format!("Bearer {}", self.token))
             .header("Range", &format!("bytes={}-{}", self.cursor, end))
             .call()
             .map_err(|e| io::Error::other(e.to_string()))?;

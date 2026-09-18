@@ -15,7 +15,11 @@ pub enum ZoneCommand {
     Intent(PlayerIntent),
 }
 
-pub fn spawn(rx: Receiver<ZoneCommand>, remote_state: Arc<Mutex<Option<ControlResponse>>>) {
+pub fn spawn(
+    rx: Receiver<ZoneCommand>,
+    remote_state: Arc<Mutex<Option<ControlResponse>>>,
+    store: Arc<currant_core::store::LibraryStore>,
+) {
     std::thread::spawn(move || {
         let mut current_peer: Option<(String, u16)>;
         let mut socket: Option<tungstenite::WebSocket<TcpStream>> = None;
@@ -40,7 +44,15 @@ pub fn spawn(rx: Receiver<ZoneCommand>, remote_state: Arc<Mutex<Option<ControlRe
                             // Timeouts ensure reads/writes don't hang if the peer vanishes
                             let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
-                            if let Ok((mut ws, _)) = client::client(url, stream) {
+                            let req = tungstenite::http::Request::builder()
+                                .uri(&url)
+                                .header(
+                                    "Authorization",
+                                    format!("Bearer {}", store.load_pairing_token()),
+                                )
+                                .body(())
+                                .unwrap();
+                            if let Ok((mut ws, _)) = client::client(req, stream) {
                                 // Request initial state
                                 if let Ok(json) = serde_json::to_string(&ControlRequest::Status) {
                                     let _ = ws.write(Message::text(json));
