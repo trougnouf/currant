@@ -441,6 +441,7 @@ pub struct App {
     col_initialized: bool,
     /// When true, column widths update immediately on scroll (no debounce).
     pub live_columns: bool,
+    pub pending_reset: bool,
 }
 
 impl App {
@@ -489,6 +490,7 @@ impl App {
             col_last_scroll: Instant::now(),
             col_initialized: false,
             live_columns: false,
+            pending_reset: false,
             watcher_tx: None,
             watcher_progress_rx: None,
             network_state: None,
@@ -606,6 +608,23 @@ impl App {
             self.expanded = None;
             self.scroll_offset = 0;
             self.follow = true;
+        }
+        if self.pending_reset {
+            self.pending_reset = false;
+            if !self.jump_to_playing_internal(&c.store) {
+                if let Some(e) = &mut self.expanded {
+                    e.selection = 0;
+                } else {
+                    match self.tab {
+                        Tab::Tracks => self.tracks.selection = 0,
+                        Tab::Files => self.files.selection = 0,
+                        Tab::Albums => self.sel_albums = 0,
+                        Tab::Artists => self.sel_artists = 0,
+                        Tab::Queue => self.sel_queue = 0,
+                        Tab::Playlists => self.sel_playlists = 0,
+                    }
+                }
+            }
         }
         self.dirty = false;
     }
@@ -751,6 +770,95 @@ impl App {
             self.status = format!("zone: {z}");
         } else {
             self.status = "zone: local".into();
+        }
+    }
+
+    fn transfer_zone(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
+        let peers = if let Some(ns) = &self.network_state {
+            ns.lock().unwrap().peers.keys().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if peers.is_empty() {
+            self.status = "cannot transfer: no peers found".into();
+            return;
+        }
+
+        let mut sorted_peers = peers;
+        sorted_peers.sort();
+
+        let next_zone = match &self.active_zone {
+            None => Some(sorted_peers[0].clone()),
+            Some(current) => {
+                let pos = sorted_peers.iter().position(|p| p == current).unwrap_or(0);
+                if pos + 1 < sorted_peers.len() {
+                    Some(sorted_peers[pos + 1].clone())
+                } else {
+                    None // wrap around to local
+                }
+            }
+        };
+
+        // 1. Gather state
+        let snap = if self.active_zone.is_some() {
+            let rs = self
+                .remote_state
+                .as_ref()
+                .and_then(|arc| arc.lock().ok())
+                .and_then(|g| g.as_ref().cloned());
+            if let Some(rs) = rs {
+                rs.queue
+            } else {
+                self.status = "cannot transfer: still fetching state".into();
+                return;
+            }
+        } else {
+            c.queue_snapshot()
+        };
+        let pos = self.position_ms();
+        let was_playing = self.is_playing;
+
+        // 2. Pause current
+        if self.is_playing {
+            self.dispatch_intent(PlayerIntent::TogglePlayPause, c);
+        }
+
+        // 3. Switch zone
+        self.active_zone = next_zone.clone();
+        if let Some(tx) = &self.zone_tx {
+            let peer_info = next_zone.as_ref().and_then(|id| {
+                self.network_state
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .peers
+                    .get(id)
+                    .map(|p| (p.ip.clone(), p.ws_port))
+            });
+            let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
+        }
+
+        // 4. Restore state on new zone
+        let intent = PlayerIntent::RestoreSnapshot {
+            queue: snap,
+            position_ms: pos,
+            is_playing: was_playing,
+        };
+        if self.active_zone.is_some() {
+            if let Some(tx) = &self.zone_tx {
+                // Sent to the newly activated WebSocket
+                let _ = tx.send(crate::zone::ZoneCommand::Intent(intent));
+            }
+        } else {
+            // Wrapped around to local
+            c.dispatch(intent);
+        }
+
+        if let Some(z) = &self.active_zone {
+            self.status = format!("transferred to zone: {z}");
+        } else {
+            self.status = "transferred to local zone".into();
         }
     }
 
@@ -959,6 +1067,7 @@ impl App {
         self.scroll_offset = 0;
         self.follow = true;
         self.dirty = true;
+        self.pending_reset = true;
     }
 
     /// Handle a key. Returns true to quit. `c` is the locked controller.
@@ -993,11 +1102,12 @@ impl App {
                 KeyCode::Backspace => {
                     self.search.pop();
                     self.invalidate_list();
+                    self.pending_reset = true;
                 }
                 KeyCode::Char(ch) => {
                     self.search.push(ch);
                     self.invalidate_list();
-                    self.reset_selection();
+                    self.pending_reset = true;
                 }
                 _ => {}
             }
@@ -1037,7 +1147,7 @@ impl App {
                 KeyCode::Char('u') => {
                     self.search.clear();
                     self.invalidate_list();
-                    self.reset_selection();
+                    self.pending_reset = true;
                 }
                 KeyCode::Char('j') => self.jump_to_playing(&c.store),
                 _ => {}
@@ -1101,6 +1211,7 @@ impl App {
             KeyCode::Char('f') => self.enqueue_selected(c, true),
             KeyCode::Char('x') => self.remove_from_queue(c),
             KeyCode::Char('z') => self.cycle_zone(),
+            KeyCode::Char('T') => self.transfer_zone(c),
             KeyCode::Char('c') => {
                 self.view = match self.view {
                     ViewPreset::Minimal => ViewPreset::Compact,
@@ -1374,23 +1485,6 @@ impl App {
         self.dirty = true;
     }
 
-    fn reset_selection(&mut self) {
-        self.scroll_offset = 0;
-        self.follow = true;
-        if let Some(e) = &mut self.expanded {
-            e.selection = 0;
-            return;
-        }
-        match self.tab {
-            Tab::Tracks => self.tracks.selection = 0,
-            Tab::Files => self.files.selection = 0,
-            Tab::Albums => self.sel_albums = 0,
-            Tab::Artists => self.sel_artists = 0,
-            Tab::Queue => self.sel_queue = 0,
-            Tab::Playlists => self.sel_playlists = 0,
-        }
-    }
-
     fn current_total(&self) -> usize {
         if let Some(e) = &self.expanded {
             if e.drilled {
@@ -1516,7 +1610,7 @@ impl App {
                 if let Some(a) = e.albums.get(e.selection).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
                     self.play_sequence(c, tracks);
-                    self.status = format!("playing album: {}", a.album);
+                    self.status = format!("playing album: {}", format_album(&a.album));
                 }
             }
             return;
@@ -1562,7 +1656,8 @@ impl App {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
                     self.play_sequence(c, tracks);
-                    self.status = format!("playing album: {} - {}", a.artist, a.album);
+                    self.status =
+                        format!("playing album: {} - {}", a.artist, format_album(&a.album));
                 }
             }
             Tab::Artists => {
@@ -1683,7 +1778,7 @@ impl App {
             SortPreset::Path => SortPreset::ArtistAlbumTrack,
         };
         self.invalidate_list();
-        self.reset_selection();
+        self.pending_reset = true;
     }
 
     fn toggle_radio(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
@@ -1876,11 +1971,10 @@ impl App {
         });
     }
 
-    fn jump_to_playing(&mut self, store: &LibraryStore) {
+    fn jump_to_playing_internal(&mut self, store: &LibraryStore) -> bool {
         self.follow = true;
         let Some(np) = &self.now_playing else {
-            self.status = "nothing playing".into();
-            return;
+            return false;
         };
         // A jump is an abrupt reposition, not a scroll — adopt the new
         // column widths immediately instead of waiting for the debounce.
@@ -1888,7 +1982,6 @@ impl App {
         let id = &np.id;
         match self.tab {
             Tab::Tracks | Tab::Files => {
-                // Search within the loaded window first.
                 let view = if self.tab == Tab::Tracks {
                     &self.tracks
                 } else {
@@ -1896,10 +1989,8 @@ impl App {
                 };
                 if let Some(idx) = view.items.iter().position(|t| &t.id == id) {
                     self.set_selection(view.offset + idx);
-                    self.status = "jumped to playing".into();
-                    return;
+                    return true;
                 }
-                // Not in the current window — query the store for its position.
                 let expr = parse_query(&self.search);
                 let sort = if self.tab == Tab::Tracks {
                     self.sort
@@ -1908,34 +1999,43 @@ impl App {
                 };
                 if let Some(pos) = store.track_position(id, &expr, sort) {
                     self.set_selection(pos as usize);
-                    self.status = "jumped to playing".into();
-                } else {
-                    // Track not in the filtered set (e.g. enqueued from
-                    // another tab) or sort is random — leave the filter intact.
-                    self.status = "playing track not in list".into();
+                    return true;
                 }
             }
             Tab::Albums => {
-                if let Some(idx) = self.albums.iter().position(|a| a.album == np.album) {
+                if let Some(idx) = self
+                    .albums
+                    .iter()
+                    .position(|a| a.album == np.album && a.artist == np.album_artist)
+                {
                     self.sel_albums = idx;
                     self.expanded = None;
-                    self.status = "jumped to playing album".into();
+                    return true;
                 }
             }
             Tab::Artists => {
-                if let Some(idx) = self.artists.iter().position(|a| a.name == np.artist) {
+                if let Some(idx) = self.artists.iter().position(|a| a.name == np.album_artist) {
                     self.sel_artists = idx;
                     self.expanded = None;
-                    self.status = "jumped to playing artist".into();
+                    return true;
                 }
             }
             Tab::Queue => {
                 if let Some(idx) = self.queue_rows.iter().position(|r| r.id == *id) {
                     self.sel_queue = idx;
-                    self.status = "jumped to playing in queue".into();
+                    return true;
                 }
             }
             Tab::Playlists => {}
+        }
+        false
+    }
+
+    fn jump_to_playing(&mut self, store: &LibraryStore) {
+        if self.jump_to_playing_internal(store) {
+            self.status = "jumped to playing".into();
+        } else {
+            self.status = "playing track not in list".into();
         }
     }
 
@@ -1967,7 +2067,7 @@ impl App {
             Tab::Albums => {
                 if let Some(a) = self.albums.get(self.sel_albums).cloned() {
                     let tracks = c.store.album_tracks(&a.artist, &a.album);
-                    let label = format!("{} - {}", a.artist, a.album);
+                    let label = format!("{} - {}", a.artist, format_album(&a.album));
                     self.expanded = Some(ExpandedView {
                         kind: ExpandKind::Album,
                         tracks,
@@ -2105,6 +2205,19 @@ pub fn display_title(t: &Track) -> String {
     truncate(t.title.clone(), 50)
 }
 
+/// Format an album name, replacing "Unknown Album" with a random symbol.
+pub fn format_album(album: &str) -> &str {
+    if album == "Unknown Album" || album.is_empty() {
+        static SYM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+        SYM.get_or_init(|| {
+            let symbols = ["◌", "⦾", "⮾", "𜱭", "⍰"];
+            symbols[fastrand::usize(..symbols.len())]
+        })
+    } else {
+        album
+    }
+}
+
 pub fn fmt_duration(secs: u32) -> String {
     if secs >= 3600 {
         format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
@@ -2155,7 +2268,9 @@ pub fn compute_ideal_widths(
     for t in items {
         max_artist = max_artist.max(disp_width(&t.artist)).min(ARTIST_CAP);
         if view != ViewPreset::Minimal {
-            max_album = max_album.max(disp_width(&t.album)).min(ALBUM_CAP);
+            max_album = max_album
+                .max(disp_width(format_album(&t.album)))
+                .min(ALBUM_CAP);
         }
         let track_no_len = if t.track_number > 0 {
             disp_width(&format!("{:02}. ", t.track_number))

@@ -133,7 +133,7 @@ All frontends fire `PlayerIntent` into the controller:
 *   `TogglePlayPause`, `NextTrack`, `PreviousTrack`, `SkipAlbum`, `StopAfter { id }`. `StopAfter` marks a specific track (empty id = current track); playback halts when that track finishes. Pressing `StopAfter` on the same track toggles it off. `SkipAlbum` drops contiguous tracks of the current album from the queues and skips.
 *   `SetVolume` — 0.0 to 1.0, persisted.
 *   `SeekTo { position_ms }` — seek the current track to a position in milliseconds. The controller resolves it against its shared `PlaybackState` (see 4.2), so it works identically for local playback and when forwarded to a remote zone.
-*   `TransferZone { to_instance }` — hand off the active zone (current track, exact position, queue) to another instance, pausing the sender; see 8.4.
+*   `RestoreSnapshot { queue, position_ms, is_playing }` — replaces the active queue and playback state. Used to hand off a session from one zone to another (see 8.4).
 *   `RateTrack` — 0-5, persisted to catalog and file tag.
 *   `SavePlaylist` / `ActivatePlaylist` / `DeletePlaylist` / `MovePlaylist { id, up }` — smart playlist management. `MovePlaylist` reorders (swaps with neighbor), changing the `g1`-`g9` index mapping.
 *   `ScanLibrary` — set roots and trigger a scan.
@@ -198,6 +198,7 @@ Metadata is read and written by lofty 0.25.
 | `H` `L` | seek backward / forward 30s |
 | `P` | save current search as a smart playlist |
 | `z` | cycle active zone (local, then each discovered peer in turn) |
+| `T` | transfer the active session (queue, track, position) to the next zone |
 | `g1`-`g9` | activate saved playlist by index |
 | `J` `K` | move playlist down / up (playlists tab) |
 | `?` | help overlay (keybindings, search syntax, playlists, about/support) — scroll with j/k/arrows/PgUp/PgDn |
@@ -296,7 +297,7 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   **Remote Control:** The UI can switch its active "Zone". If the Phone selects the PC Zone, the Phone UI forwards all `PlayerIntent` keypresses over WebSocket to the PC.
 *   **Zone Cycling:** `z` in the TUI cycles the active zone through the discovered peers (sorted by instance id), wrapping back to local. Switching zones resets the remote state; the zone client thread reconnects and requests a status snapshot from the new target.
 *   **Remote UI State:** While a zone is active, the TUI renders the remote target's state instead of the local one: Now Playing, queue (explicit + dynamic), volume, play/pause, position, and stop-after come from the target's `ControlResponse` (polled over the WebSocket). Seek and stop-after intents are forwarded like any other keypress. Local playback is left untouched; switching back to local restores the local view.
-*   **Zone Handoff:** A new `PlayerIntent::TransferZone { to_instance }` intent moves the current track, exact millisecond position, and queue to the new target, pausing the sender seamlessly.
+*   **Zone Handoff:** `T` (Shift+T) transfers the active session to the next zone. The UI pauses the current zone, cycles to the next peer, and sends a `RestoreSnapshot` intent carrying the exact queue, track, position, and play state. This achieves seamless multi-room handoff.
 *   **Scrobbling:** Only the active Playback Target executes scrobbles, preventing duplicated API calls.
 
 ### 8.5. Audio Streaming & UI Indicators

@@ -5,7 +5,7 @@
 
 use crate::app::{
     App, ColumnWidths, ExpandKind, QueueKind, SettingsPane, Tab, ViewPreset, col_num, col_text,
-    disp_width, display_title, fmt_duration, render_rating, truncate,
+    disp_width, display_title, fmt_duration, format_album, render_rating, truncate,
 };
 use currant_core::model::Track;
 use ratatui::Frame;
@@ -258,7 +258,7 @@ fn draw_expanded_albums(f: &mut Frame, app: &App, area: Rect, e: &crate::app::Ex
             };
             ListItem::new(format!(
                 "{}{}({} tracks, {})",
-                a.album,
+                format_album(&a.album),
                 year,
                 a.track_count,
                 fmt_duration(a.total_duration_secs)
@@ -400,7 +400,10 @@ fn track_line<'a>(
     // Album (left-aligned, compact and full only).
     if view != ViewPreset::Minimal {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(col_text(&t.album, cols.album), album_style));
+        spans.push(Span::styled(
+            col_text(format_album(&t.album), cols.album),
+            album_style,
+        ));
     }
 
     // Title column: track_no prefix + title, left-aligned as a unit.
@@ -465,7 +468,7 @@ fn draw_albums(f: &mut Frame, app: &App, area: Rect) {
             ListItem::new(format!(
                 "{} - {}{}({} tracks, {})",
                 a.artist,
-                a.album,
+                format_album(&a.album),
                 year,
                 a.track_count,
                 fmt_duration(a.total_duration_secs)
@@ -651,7 +654,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" - "),
             Span::styled(t.artist.clone(), Style::default().fg(theme::ARTIST)),
             Span::raw(" ["),
-            Span::styled(t.album.clone(), Style::default().fg(theme::ALBUM)),
+            Span::styled(
+                format_album(&t.album).to_string(),
+                Style::default().fg(theme::ALBUM),
+            ),
             Span::raw("] "),
             Span::styled(render_rating(t.rating), Style::default().fg(theme::RATING)),
             Span::raw(" "),
@@ -718,7 +724,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 /// Context-sensitive keybinding hint for the bottom status line.
 fn tab_hint(tab: Tab) -> String {
-    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  N:skip-album  +/-:vol  h/l:seek  v:expand  f:play-next e:queue  z:zone  o:settings  ?:help  q:quit  Ctrl+J:jump to playing";
+    let universal = "  Tab:tabs F1-F6:jump  /:search  p:play  n:next <:prev  N:skip-album  +/-:vol  h/l:seek  v:expand  f:play-next e:queue  z:zone T:transfer  o:settings  ?:help  q:quit  Ctrl+J:jump";
     let actions = match tab {
         Tab::Tracks | Tab::Files => {
             "Enter:play  f:play-next  e:queue  x:remove  0-5:rate  d:details  c:view  s:sort  r:radio  S:stop-after"
@@ -745,7 +751,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(theme::POPUP_BORDER))
         .padding(Padding::new(2, 2, 1, 1));
     let mut text = String::new();
-    let bindings: [(&str, &str); 29] = [
+    let bindings: [(&str, &str); 30] = [
         ("/search", "filter the current tab (Esc to leave)"),
         ("Tab / Shift+Tab", "switch tabs"),
         (
@@ -779,6 +785,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
             "open settings (scan roots, listenbrainz token, volume)",
         ),
         ("z", "cycle active zone (control remote players)"),
+        ("T", "transfer playback to the next zone"),
         ("Ctrl+J", "jump to currently playing track in the list"),
         ("q", "quit (Esc closes overlays)"),
     ];
@@ -854,7 +861,7 @@ fn draw_details(f: &mut Frame, area: Rect, track: &Track) {
         ]),
         Line::from(vec![
             Span::styled("album:  ", label),
-            Span::styled(&track.album, val),
+            Span::styled(format_album(&track.album).to_string(), val),
         ]),
         Line::from(vec![
             Span::styled("album_artist: ", label),

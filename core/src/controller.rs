@@ -350,9 +350,14 @@ impl PlayerController {
             PlayerIntent::SeekTo { position_ms } => {
                 self.playback_state.request_seek(position_ms);
             }
-            PlayerIntent::TransferZone { .. } => {
-                // Zone handoff is a networking concern handled by the frontend
-                // (see SPECS 8.4); the core controller only tracks playback.
+            PlayerIntent::RestoreSnapshot {
+                queue,
+                position_ms,
+                is_playing,
+            } => {
+                self.restore_queue(queue);
+                self.is_playing = is_playing;
+                self.playback_state.request_seek(position_ms);
             }
             PlayerIntent::RateTrack { id, rating } => {
                 let rating = rating.min(5);

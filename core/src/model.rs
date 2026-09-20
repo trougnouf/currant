@@ -189,32 +189,67 @@ pub struct Artist {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PlayerIntent {
     // Playback & queue
-    PlayTrack { id: String },
-    Enqueue { id: String, next: bool },
-    RemoveFromQueue { id: String },
+    PlayTrack {
+        id: String,
+    },
+    Enqueue {
+        id: String,
+        next: bool,
+    },
+    RemoveFromQueue {
+        id: String,
+    },
     ClearQueue,
-    JumpTo { id: String },
+    JumpTo {
+        id: String,
+    },
     TogglePlayPause,
     NextTrack,
     PreviousTrack,
     SkipAlbum,
-    StopAfter { id: String },
-    SetVolume { volume: f32 },
-    SeekTo { position_ms: u64 },
-    TransferZone { to_instance: String },
+    StopAfter {
+        id: String,
+    },
+    SetVolume {
+        volume: f32,
+    },
+    SeekTo {
+        position_ms: u64,
+    },
+    RestoreSnapshot {
+        queue: QueueSnapshot,
+        position_ms: u64,
+        is_playing: bool,
+    },
 
     // Metadata
-    RateTrack { id: String, rating: u8 },
-    IncrementPlayCount { id: String },
+    RateTrack {
+        id: String,
+        rating: u8,
+    },
+    IncrementPlayCount {
+        id: String,
+    },
 
     // Smart playlists
-    SavePlaylist { name: String },
-    DeletePlaylist { id: String },
-    ActivatePlaylist { id: String },
-    MovePlaylist { id: String, up: bool },
+    SavePlaylist {
+        name: String,
+    },
+    DeletePlaylist {
+        id: String,
+    },
+    ActivatePlaylist {
+        id: String,
+    },
+    MovePlaylist {
+        id: String,
+        up: bool,
+    },
 
     // Library
-    ScanLibrary { roots: Vec<String> },
+    ScanLibrary {
+        roots: Vec<String>,
+    },
 }
 
 /// A snapshot of the live queue, persisted so the session resumes cleanly.
