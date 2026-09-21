@@ -11,8 +11,10 @@ use currant_core::net::NetworkState;
 use currant_core::net::stream::{HttpSeekableReader, Seekable};
 use currant_core::store::LibraryStore;
 use lofty::file::TaggedFileExt;
-use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
+use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rodio::{Decoder, Player, Source};
 use std::fs::File;
+use std::num::NonZero;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -113,17 +115,102 @@ pub fn spawn(
     network: Arc<Mutex<NetworkState>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let stream = match DeviceSinkBuilder::open_default_sink() {
+        let host = rodio::cpal::default_host();
+        let device = match host.default_output_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let supported_config = match device.default_output_config() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let sample_format = supported_config.sample_format();
+        let config: rodio::cpal::StreamConfig = supported_config.into();
+
+        let (mixer_ctrl, mut mixer_out) = match (
+            NonZero::new(config.channels),
+            NonZero::new(config.sample_rate),
+        ) {
+            (Some(channels), Some(sample_rate)) => rodio::mixer::mixer(channels, sample_rate),
+            _ => return,
+        };
+        let err_fn = |err| eprintln!("audio stream error: {err}");
+
+        // Feed the mixer output into a raw cpal stream so we keep ownership
+        // of the stream and can cork it at the OS level while paused.
+        let stream = match sample_format {
+            rodio::cpal::SampleFormat::F32 => device.build_output_stream(
+                &config,
+                move |data: &mut [f32], _| {
+                    for sample in data.iter_mut() {
+                        *sample = mixer_out.next().unwrap_or(0.0);
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            rodio::cpal::SampleFormat::I16 => device.build_output_stream(
+                &config,
+                move |data: &mut [i16], _| {
+                    for sample in data.iter_mut() {
+                        *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0)
+                            * f32::from(i16::MAX)) as i16;
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            rodio::cpal::SampleFormat::U16 => device.build_output_stream(
+                &config,
+                move |data: &mut [u16], _| {
+                    for sample in data.iter_mut() {
+                        *sample = ((mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0) + 1.0)
+                            * 0.5
+                            * f32::from(u16::MAX)) as u16;
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            rodio::cpal::SampleFormat::I32 => device.build_output_stream(
+                &config,
+                move |data: &mut [i32], _| {
+                    for sample in data.iter_mut() {
+                        *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0)
+                            * (i32::MAX as f32)) as i32;
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            rodio::cpal::SampleFormat::F64 => device.build_output_stream(
+                &config,
+                move |data: &mut [f64], _| {
+                    for sample in data.iter_mut() {
+                        *sample = f64::from(mixer_out.next().unwrap_or(0.0));
+                    }
+                },
+                err_fn,
+                None,
+            ),
+            _ => return, // Unsupported sample format
+        };
+        let stream = match stream {
             Ok(s) => s,
             Err(_) => return,
         };
-        let player = Player::connect_new(stream.mixer());
+        if stream.play().is_err() {
+            return;
+        }
+
+        let player = Player::connect_new(&mixer_ctrl);
 
         let mut playing_id: Option<String> = None;
         let mut started_at = Instant::now();
         let mut threshold = Duration::from_secs(30);
         let mut rg_key: (Option<String>, bool) = (None, false);
         let mut current_rg_multiplier = 1.0_f32;
+        let mut stream_paused = false;
 
         loop {
             let (is_playing, current, volume, rg_enabled) = {
@@ -167,8 +254,16 @@ pub fn spawn(
 
             if !is_playing {
                 player.pause();
+                if !stream_paused {
+                    let _ = stream.pause();
+                    stream_paused = true;
+                }
                 thread::sleep(Duration::from_millis(100));
                 continue;
+            }
+            if stream_paused {
+                let _ = stream.play();
+                stream_paused = false;
             }
             player.play();
 
