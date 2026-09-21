@@ -2199,10 +2199,10 @@ pub fn truncate(s: String, max: usize) -> String {
     }
 }
 
-/// Truncate a track title for display. Very long titles (e.g. artistic tags
-/// like "++++++++++++++++++++++++++++++++++++++") make the line unreadable.
+/// Return the track title for display. Layout handles truncation dynamically
+/// based on available terminal width.
 pub fn display_title(t: &Track) -> String {
-    truncate(t.title.clone(), 50)
+    t.title.clone()
 }
 
 /// Format an album name, replacing "Unknown Album" with a random symbol.
@@ -2252,12 +2252,6 @@ pub fn compute_ideal_widths(
     view: ViewPreset,
     usable_width: usize,
 ) -> ColumnWidths {
-    // Natural-width caps so one very long value in the window doesn't starve
-    // the other columns. Title is already capped at 50 by display_title.
-    const ARTIST_CAP: usize = 25;
-    const ALBUM_CAP: usize = 35;
-    const GENRE_CAP: usize = 15;
-
     let mut max_artist = 0usize;
     let mut max_album = 0usize;
     let mut max_title = 0usize;
@@ -2266,11 +2260,9 @@ pub fn compute_ideal_widths(
     let mut max_duration = 0usize;
 
     for t in items {
-        max_artist = max_artist.max(disp_width(&t.artist)).min(ARTIST_CAP);
+        max_artist = max_artist.max(disp_width(&t.artist));
         if view != ViewPreset::Minimal {
-            max_album = max_album
-                .max(disp_width(format_album(&t.album)))
-                .min(ALBUM_CAP);
+            max_album = max_album.max(disp_width(format_album(&t.album)));
         }
         let track_no_len = if t.track_number > 0 {
             disp_width(&format!("{:02}. ", t.track_number))
@@ -2282,7 +2274,7 @@ pub fn compute_ideal_widths(
             if t.year > 0 {
                 max_year = max_year.max(disp_width(&t.year.to_string()));
             }
-            max_genre = max_genre.max(disp_width(&t.genre)).min(GENRE_CAP);
+            max_genre = max_genre.max(disp_width(&t.genre));
         }
         max_duration = max_duration.max(disp_width(&fmt_duration(t.duration_secs)));
     }
