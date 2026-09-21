@@ -978,6 +978,15 @@ impl LibraryStore {
             .unwrap_or(false)
     }
 
+    pub fn save_view_preset(&self, preset: &str) {
+        self.kv_set("view_preset", preset);
+    }
+
+    pub fn load_view_preset(&self) -> String {
+        self.kv_get("view_preset")
+            .unwrap_or_else(|| "compact".to_string())
+    }
+
     pub fn save_smart_playlists(&self, playlists: &[SmartPlaylist]) {
         if let Ok(json) = serde_json::to_string(playlists) {
             self.kv_set("smart_playlists", &json);

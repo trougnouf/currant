@@ -1218,6 +1218,12 @@ impl App {
                     ViewPreset::Compact => ViewPreset::Full,
                     ViewPreset::Full => ViewPreset::Minimal,
                 };
+                let preset_str = match self.view {
+                    ViewPreset::Minimal => "minimal",
+                    ViewPreset::Compact => "compact",
+                    ViewPreset::Full => "full",
+                };
+                c.store.save_view_preset(preset_str);
             }
             KeyCode::Char('s') => {
                 self.cycle_sort();

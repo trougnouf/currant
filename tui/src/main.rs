@@ -148,6 +148,11 @@ fn main() -> Result<(), io::Error> {
     crate::control::spawn(controller.clone());
 
     let mut app = App::new();
+    app.view = match store.load_view_preset().as_str() {
+        "minimal" => crate::app::ViewPreset::Minimal,
+        "full" => crate::app::ViewPreset::Full,
+        _ => crate::app::ViewPreset::Compact,
+    };
     app.watcher_tx = Some(watcher_tx);
     app.network_state = Some(network_state);
     app.zone_tx = Some(zone_tx);

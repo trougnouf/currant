@@ -186,7 +186,7 @@ Metadata is read and written by lofty 0.25.
 | `Ctrl+J` | jump to the currently playing track in the current tab |
 | `S` | stop after selected track (queue tab) or current track (elsewhere) |
 | `0`-`5` | rate track (0 clears) |
-| `c` | cycle columns (minimal / compact / full) |
+| `c` | cycle columns (minimal / compact / full), persisted |
 | `s` | cycle sort |
 | `r` `R` | toggle radio (random album / random / off) |
 | `p` | play / pause |
@@ -212,6 +212,8 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 *   **minimal** — artist, track number + title, duration
 *   **compact** — + album, rating
 *   **full** — + year, genre
+
+The active preset is persisted in the `kv` store (`view_preset`) whenever it is cycled and restored on launch; an unknown or missing value falls back to compact.
 
 ### 6.4. Settings pane
 
