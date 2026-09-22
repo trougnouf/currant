@@ -110,6 +110,7 @@ fn open_source(
             return Some(Box::new(src));
         }
     }
+    eprintln!("failed to open track {}: {}", track.id, track.path);
     None
 }
 
