@@ -59,6 +59,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 
 *   Ratings use the MusicBee-style popularimeter (POPM frame for ID3v2, Vorbis Comments for FLAC/OGG/Opus) so they interoperate with Amarok/Clementine/Strawberry.
 *   Rating 0 removes the popularimeter entry.
+*   The tag is written to a temporary file in the same directory, verified, then atomically renamed over the original, so a file is never left corrupted. If verification finds the rewrite dropped the audio (lofty's OGG writer silently does this when the setup header shares a page with the first audio packet), the write is discarded and the original is kept; the rating is still recorded in the catalog.
 *   On rescan with unchanged mtime, rating/play_count/last_played are preserved from the existing catalog row. On changed mtime, they reset to the file's tagged values.
 
 ### 2.3. Key/value store
