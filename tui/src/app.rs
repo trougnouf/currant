@@ -208,7 +208,10 @@ impl SettingsPane {
             }
             SettingsField::AddRoot => ("scan root", "+ add".to_string()),
             SettingsField::Token => ("listenbrainz token", self.token.clone()),
-            SettingsField::PairingToken => ("mesh pairing token", self.pairing_token.clone()),
+            SettingsField::PairingToken => (
+                "mesh pairing token (requires restart)",
+                self.pairing_token.clone(),
+            ),
             SettingsField::Volume => (
                 "default volume",
                 format!("{:.0}%", (self.volume * 100.0).round()),

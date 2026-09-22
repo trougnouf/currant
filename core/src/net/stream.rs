@@ -23,14 +23,15 @@ pub struct HttpSeekableReader {
     auth_header: String,
     agent: ureq::Agent,
     cursor: u64,
-    /// Total length from the `HEAD` request. Zero when the peer didn't
-    /// report one; range requests stay bounded by the read buffer either way.
+    /// Total length from the opening `Content-Range` probe. Zero when the
+    /// peer didn't report one; range requests stay bounded by the read
+    /// buffer either way.
     total: u64,
 }
 
 impl HttpSeekableReader {
-    /// Open the remote file. A `HEAD` request learns the total length; if
-    /// it fails, the reader falls back to unbounded ranges.
+    /// Open the remote file. A zero-length `GET` request securely learns the total
+    /// length from the `Content-Range` header, bypassing tiny_http HEAD limitations.
     pub fn new(ip: &str, port: u16, track_id: &str, token: String) -> io::Result<Self> {
         let uri = format!("/stream/{track_id}");
         let url = format!("https://{ip}:{port}{uri}");
@@ -42,13 +43,23 @@ impl HttpSeekableReader {
                 .build(),
         );
         let auth_header = crate::net::auth::generate_header(&token, &uri);
+
         let total = agent
-            .head(&url)
+            .get(&url)
             .header("Authorization", &auth_header)
+            .header("Range", "bytes=0-0")
             .call()
             .ok()
-            .and_then(|response| response.body().content_length())
+            .and_then(|res| {
+                res.headers()
+                    .get("Content-Range")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+            })
+            .and_then(|cr| cr.split('/').next_back().map(|s| s.to_string()))
+            .and_then(|t| t.parse::<u64>().ok())
             .unwrap_or(0);
+
         Ok(Self {
             url,
             auth_header,

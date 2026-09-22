@@ -19,6 +19,14 @@ fn deterministic_derivation() {
     assert_eq!(m1.ca_der, m2.ca_der, "ca der must be deterministic");
 }
 
+// Caching: ensure multiple calls return identical ARCs efficiently.
+#[test]
+fn memoized_crypto() {
+    let m1 = currant_core::net::tls::get_crypto(TOKEN);
+    let m2 = currant_core::net::tls::get_crypto(TOKEN);
+    assert!(std::ptr::eq(&*m1, &*m2), "must reuse the exact same Arc");
+}
+
 // HMAC round trip, including the negative cases.
 #[test]
 fn hmac_auth() {
@@ -41,10 +49,10 @@ fn hmac_auth() {
 #[test]
 fn media_layer() {
     let uri = "/sync?since=0";
-    let media = currant_core::net::tls::generate_crypto(TOKEN);
+    let media = currant_core::net::tls::get_crypto(TOKEN);
     let ssl_config = tiny_http::SslConfig {
-        certificate: media.leaf_pem,
-        private_key: media.key_pem,
+        certificate: media.leaf_pem.clone(),
+        private_key: media.key_pem.clone(),
     };
     let server = tiny_http::Server::https("127.0.0.1:0", ssl_config).expect("bind https server");
     let port = server.server_addr().to_ip().unwrap().port();
@@ -71,17 +79,18 @@ fn media_layer() {
         .read_to_string()
         .unwrap();
     assert_eq!(body, "ok");
-    // tiny_http omits Content-Length on HEAD responses; the reader already
-    // falls back to unbounded ranges in that case, so only require success.
-    let head = agent
-        .head(&url)
+    // tiny_http omits Content-Length on HEAD responses, so HttpSeekableReader
+    // uses GET with Range: bytes=0-0. Let's test that it works.
+    let head_equivalent = agent
+        .get(&url)
         .header(
             "Authorization",
             &currant_core::net::auth::generate_header(TOKEN, uri),
         )
+        .header("Range", "bytes=0-0")
         .call()
-        .expect("head over unverified tls");
-    assert_eq!(head.status(), 200);
+        .expect("range get over unverified tls");
+    assert_eq!(head_equivalent.status(), 200); // 200 because the mock server ignores ranges
     server_thread.join().unwrap();
 }
 

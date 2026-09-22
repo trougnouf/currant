@@ -34,29 +34,21 @@ pub fn verify_header(token: &str, uri: &str, header: &str) -> bool {
     let mut mac =
         HmacSha256::new_from_slice(token.as_bytes()).expect("HMAC can take key of any size");
     mac.update(uri.as_bytes());
-    let expected_result = mac.finalize().into_bytes();
-
-    // Decode hex
-    let mut sig_bytes = Vec::with_capacity(sig_hex.len() / 2);
-    let mut chars = sig_hex.chars();
-    while let (Some(c1), Some(c2)) = (chars.next(), chars.next()) {
-        if let (Ok(b1), Ok(b2)) = (
-            u8::from_str_radix(&c1.to_string(), 16),
-            u8::from_str_radix(&c2.to_string(), 16),
-        ) {
-            sig_bytes.push((b1 << 4) | b2);
+    // Decode hex without per-character allocations.
+    if sig_hex.len() % 2 != 0 {
+        return false;
+    }
+    let mut sig_bytes = vec![0u8; sig_hex.len() / 2];
+    for (i, chunk) in sig_hex.as_bytes().chunks(2).enumerate() {
+        let high = (chunk[0] as char).to_digit(16);
+        let low = (chunk[1] as char).to_digit(16);
+        if let (Some(h), Some(l)) = (high, low) {
+            sig_bytes[i] = (h as u8) << 4 | (l as u8);
         } else {
             return false;
         }
     }
 
-    // Constant-time comparison to prevent timing attacks
-    if sig_bytes.len() != expected_result.len() {
-        return false;
-    }
-    let mut result = 0;
-    for (x, y) in sig_bytes.iter().zip(expected_result.iter()) {
-        result |= x ^ y;
-    }
-    result == 0
+    // Constant-time comparison using the hmac crate.
+    mac.verify_slice(&sig_bytes).is_ok()
 }

@@ -221,7 +221,7 @@ Opened with `o` as a centered overlay. It lists the editable settings as rows: o
 
 *   **Scan roots** — the directories the scanner walks. Editing a root replaces it; `x` (or an empty value) removes it; "+ add" appends one. If the roots differ from when the pane opened, saving persists them and triggers an incremental rescan in the background. When none are saved yet, the pane is seeded with the default roots (XDG audio dir / `~/Music`).
 *   **Listenbrainz token** — the API token for scrobbling. Saving re-wires the scrobbler live (empty disables it).
-*   **Mesh pairing token** — the shared secret that authorizes peers on the local network (see §8.1). Generated on first launch; copy it to other devices to merge meshes. Saving takes effect immediately because the network layer reads the token from the store on every request and connection attempt.
+*   **Mesh pairing token** — the shared secret that authorizes peers on the local network (see §8.1). Generated on first launch; copy it to other devices to merge meshes. Rotating it requires a restart, because the media server binds its certificate once at startup.
 *   **Default volume** — 0-100, clamped. Saving applies it to the current session and persists it.
 *   **ReplayGain** — (default off) normalizes volume based on ReplayGain tags.
 *   **Watch roots** — (default off) monitors scan roots for file system changes and auto-rescans.
@@ -277,7 +277,7 @@ Currant instances operate as peers in a decentralized mesh. An instance dynamica
 *   **Authentication:** Devices are paired via a shared 128-bit pairing token, generated on first launch and stored in `kv` (`pairing_token`); it is viewable and editable in the settings pane. The token deterministically seeds two Ed25519 key pairs — one for a root CA and one for the leaf certificate (SAN `currant.local`) it signs — which both peers derive locally, so no certificate exchange is ever needed. The leaf stays a non-CA: webpki rejects CA certificates as end entities.
     *   **Control layer (`/ws`):** strict TLS. Each side wraps the WebSocket upgrade in a rustls connection that verifies the peer's token-derived certificate against the locally derived root, ignoring the hostname/IP (an IP may roam); the `Authorization: Bearer <token>` header is then sent inside the verified tunnel. A man-in-the-middle cannot complete the handshake without the token, so the state-mutating control channel is immune to MITM and replay.
     *   **Media layer (`/sync`, `/stream`):** unverified TLS. The tunnel is encrypted (blocking passive eavesdropping) but not verified, so the token is never transmitted over it. Each read-only request instead carries a static `Authorization: Currant <hmac-sha256(uri)>` header keyed with the token, bound to the URI to prevent cross-endpoint use. Replay is harmless because these endpoints are read-only.
-    *   The token is read from the store on each request/connection attempt, so rotating it in the settings pane takes effect immediately without a restart (it changes both the HMAC key and the derived certificate).
+    *   The token is read from the store on each request/connection attempt. However, the `tiny_http` media server binds the certificates exactly once at startup. Therefore, rotating the pairing token in the settings pane requires restarting the application to take effect fully across all endpoints.
 
 ### 8.2. Global Catalog & Smart Deduplication
 To avoid transferring files that already exist locally (regardless of folder structures), Currant deduplicates tracks using metadata hashes.

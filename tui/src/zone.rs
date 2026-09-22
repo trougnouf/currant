@@ -21,7 +21,6 @@ pub fn spawn(
     store: Arc<currant_core::store::LibraryStore>,
 ) {
     std::thread::spawn(move || {
-        let mut current_peer: Option<(String, u16)>;
         let mut socket: Option<
             tungstenite::WebSocket<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>,
         > = None;
@@ -36,11 +35,10 @@ pub fn spawn(
 
             match rx.recv_timeout(timeout) {
                 Ok(ZoneCommand::Switch(peer)) => {
-                    current_peer = peer;
                     socket = None; // Drop old connection
                     *remote_state.lock().unwrap() = None;
 
-                    if let Some((ref ip, port)) = current_peer {
+                    if let Some((ref ip, port)) = peer {
                         let url = format!("wss://{ip}:{port}/ws");
                         if let Ok(tcp_stream) = TcpStream::connect((ip.as_str(), port)) {
                             // Generous timeout for the TLS + WebSocket handshakes

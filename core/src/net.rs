@@ -42,10 +42,10 @@ pub fn start_network(
 
     // 1. Start HTTP Server (Media streaming & Delta sync)
     // Binding to port 0 lets the OS pick an available port.
-    let crypto = crate::net::tls::generate_crypto(&store.load_pairing_token());
+    let crypto = crate::net::tls::get_crypto(&store.load_pairing_token());
     let ssl_config = tiny_http::SslConfig {
-        certificate: crypto.leaf_pem,
-        private_key: crypto.key_pem,
+        certificate: crypto.leaf_pem.clone(),
+        private_key: crypto.key_pem.clone(),
     };
     let http_server = Server::https("0.0.0.0:0", ssl_config).expect("Failed to bind HTTPS server");
     let http_port = http_server
@@ -238,6 +238,10 @@ pub fn start_network(
                             .or_else(|| info.get_addresses().iter().map(|a| a.to_ip_addr()).next())
                             .map(|a| a.to_string())
                             .unwrap_or_default();
+
+                        if ip.is_empty() {
+                            continue;
+                        }
 
                         {
                             let mut s = state_clone.lock().unwrap();

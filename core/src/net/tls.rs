@@ -16,7 +16,8 @@ use rustls::{
     ClientConfig, DigitallySignedStruct, Error, RootCertStore, ServerConfig, SignatureScheme,
 };
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Verifies the token-derived certificate while ignoring the hostname/IP,
 /// which may roam (Wi-Fi, VPN, DHCP).
@@ -80,6 +81,20 @@ pub struct CryptoMaterial {
     pub key_der: PrivateKeyDer<'static>,
 }
 
+static CRYPTO_CACHE: LazyLock<Mutex<HashMap<String, Arc<CryptoMaterial>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Memoized access to deterministic crypto material. Generating X.509
+/// certificates and signing them is computationally heavy, so it is cached
+/// by token.
+pub fn get_crypto(token: &str) -> Arc<CryptoMaterial> {
+    let mut cache = CRYPTO_CACHE.lock().unwrap();
+    cache
+        .entry(token.to_string())
+        .or_insert_with(|| Arc::new(generate_crypto(token)))
+        .clone()
+}
+
 /// Derives the deterministic crypto material from the pairing token: a root
 /// CA certificate and a leaf certificate signed by it. Both peers derive
 /// identical material, so no certificate exchange is ever needed.
@@ -134,10 +149,10 @@ fn derive_pkcs8(token: &str, salt: &[u8]) -> Vec<u8> {
 
 /// Server config for the strict TLS control layer (WebSocket).
 pub fn server_config(token: &str) -> Arc<ServerConfig> {
-    let crypto = generate_crypto(token);
+    let crypto = get_crypto(token);
     let config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(vec![crypto.leaf_der], crypto.key_der)
+        .with_single_cert(vec![crypto.leaf_der.clone()], crypto.key_der.clone_key())
         .expect("bad cert/key");
     Arc::new(config)
 }
@@ -145,9 +160,11 @@ pub fn server_config(token: &str) -> Arc<ServerConfig> {
 /// Client config for the strict TLS control layer: verifies the peer's
 /// token-derived certificate, ignoring the hostname/IP.
 pub fn rustls_client_config(token: &str) -> Arc<ClientConfig> {
-    let crypto = generate_crypto(token);
+    let crypto = get_crypto(token);
     let mut root_store = RootCertStore::empty();
-    root_store.add(crypto.ca_der).expect("failed to add root");
+    root_store
+        .add(crypto.ca_der.clone())
+        .expect("failed to add root");
     let inner = WebPkiServerVerifier::builder(Arc::new(root_store))
         .build()
         .expect("webpki verifier");
