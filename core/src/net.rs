@@ -21,7 +21,8 @@ pub const SERVICE_TYPE: &str = "_currant._tcp.local.";
 #[derive(Debug, Clone)]
 pub struct Peer {
     pub instance_id: String,
-    pub ip: String,
+    pub name: String,
+    pub ips: Vec<String>,
     pub http_port: u16,
     pub ws_port: u16,
 }
@@ -175,8 +176,17 @@ pub fn start_network(
 
     // 3. Start mDNS Discovery (Zeroconf)
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
+    let hostname = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Currant".to_string());
+
     let properties = vec![
         ("id".to_string(), local_instance_id.clone()),
+        ("name".to_string(), hostname),
         ("http".to_string(), http_port.to_string()),
         ("ws".to_string(), ws_port.to_string()),
     ];
@@ -220,6 +230,10 @@ pub fn start_network(
                         if id == local_id {
                             continue; // Skip self
                         }
+                        let name = info
+                            .get_property_val_str("name")
+                            .unwrap_or("Unknown")
+                            .to_string();
                         let http_p = info
                             .get_property_val_str("http")
                             .and_then(|p| p.parse().ok())
@@ -228,19 +242,16 @@ pub fn start_network(
                             .get_property_val_str("ws")
                             .and_then(|p| p.parse().ok())
                             .unwrap_or(0);
-                        // Prefer a routable IPv4 address: mdns-sd may report a
-                        // link-local IPv6 or a docker-bridge IP that would make
-                        // the HTTP dial silently fail.
-                        let ip = info
+                        // mDNS may report a docker-bridge IP, loopback, or IPv6. Keep all
+                        // routable IPv4 addresses so clients can try them until one connects.
+                        let ips: Vec<String> = info
                             .get_addresses()
                             .iter()
-                            .map(|a| a.to_ip_addr())
-                            .find(|a| a.is_ipv4() && !a.is_loopback())
-                            .or_else(|| info.get_addresses().iter().map(|a| a.to_ip_addr()).next())
+                            .filter(|a| !a.is_loopback() && a.is_ipv4())
                             .map(|a| a.to_string())
-                            .unwrap_or_default();
+                            .collect();
 
-                        if ip.is_empty() {
+                        if ips.is_empty() {
                             continue;
                         }
 
@@ -250,7 +261,8 @@ pub fn start_network(
                                 id.to_string(),
                                 Peer {
                                     instance_id: id.to_string(),
-                                    ip: ip.clone(),
+                                    name,
+                                    ips: ips.clone(),
                                     http_port: http_p,
                                     ws_port: ws_p,
                                 },
@@ -266,15 +278,19 @@ pub fn start_network(
                             let since = sync_store.get_last_sync(&peer_id);
                             let token = sync_store.load_pairing_token();
                             let uri = format!("/sync?since={since}");
-                            let url = format!("https://{ip}:{http_p}{uri}");
                             let auth_header = crate::net::auth::generate_header(&token, &uri);
-                            if let Ok(mut response) =
-                                agent.get(&url).header("Authorization", &auth_header).call()
-                                && let Ok(payload) =
-                                    response.body_mut().read_json::<crate::model::SyncPayload>()
-                            {
-                                sync_store.apply_sync_payload(&peer_id, &payload);
-                                sync_store.set_last_sync(&peer_id, crate::store::unix_now());
+
+                            for ip in ips {
+                                let url = format!("https://{ip}:{http_p}{uri}");
+                                if let Ok(mut response) =
+                                    agent.get(&url).header("Authorization", &auth_header).call()
+                                    && let Ok(payload) =
+                                        response.body_mut().read_json::<crate::model::SyncPayload>()
+                                {
+                                    sync_store.apply_sync_payload(&peer_id, &payload);
+                                    sync_store.set_last_sync(&peer_id, crate::store::unix_now());
+                                    break;
+                                }
                             }
                         });
                     }

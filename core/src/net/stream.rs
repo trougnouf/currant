@@ -32,9 +32,8 @@ pub struct HttpSeekableReader {
 impl HttpSeekableReader {
     /// Open the remote file. A zero-length `GET` request securely learns the total
     /// length from the `Content-Range` header, bypassing tiny_http HEAD limitations.
-    pub fn new(ip: &str, port: u16, track_id: &str, token: String) -> io::Result<Self> {
+    pub fn new(ips: &[String], port: u16, track_id: &str, token: String) -> io::Result<Self> {
         let uri = format!("/stream/{track_id}");
-        let url = format!("https://{ip}:{port}{uri}");
         let tls_config = crate::net::tls::ureq_client_config();
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
@@ -44,29 +43,39 @@ impl HttpSeekableReader {
         );
         let auth_header = crate::net::auth::generate_header(&token, &uri);
 
-        let total = agent
-            .get(&url)
-            .header("Authorization", &auth_header)
-            .header("Range", "bytes=0-0")
-            .call()
-            .ok()
-            .and_then(|res| {
-                res.headers()
-                    .get("Content-Range")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string())
-            })
-            .and_then(|cr| cr.split('/').next_back().map(|s| s.to_string()))
-            .and_then(|t| t.parse::<u64>().ok())
-            .unwrap_or(0);
+        let mut last_err = io::Error::new(io::ErrorKind::NotConnected, "no IPs provided");
 
-        Ok(Self {
-            url,
-            auth_header,
-            agent,
-            cursor: 0,
-            total,
-        })
+        for ip in ips {
+            let url = format!("https://{ip}:{port}{uri}");
+            match agent
+                .get(&url)
+                .header("Authorization", &auth_header)
+                .header("Range", "bytes=0-0")
+                .call()
+            {
+                Ok(res) => {
+                    let total = res
+                        .headers()
+                        .get("Content-Range")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.split('/').next_back())
+                        .and_then(|t| t.parse::<u64>().ok())
+                        .unwrap_or(0);
+
+                    return Ok(Self {
+                        url,
+                        auth_header,
+                        agent,
+                        cursor: 0,
+                        total,
+                    });
+                }
+                Err(e) => {
+                    last_err = io::Error::other(e.to_string());
+                }
+            }
+        }
+        Err(last_err)
     }
 }
 

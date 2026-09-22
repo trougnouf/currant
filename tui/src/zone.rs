@@ -11,7 +11,7 @@ use std::time::Duration;
 use tungstenite::{Message, client};
 
 pub enum ZoneCommand {
-    Switch(Option<(String, u16)>), // IP and WS port
+    Switch(Option<(Vec<String>, u16)>), // IPs and WS port
     Intent(PlayerIntent),
 }
 
@@ -38,9 +38,19 @@ pub fn spawn(
                     socket = None; // Drop old connection
                     *remote_state.lock().unwrap() = None;
 
-                    if let Some((ref ip, port)) = peer {
-                        let url = format!("wss://{ip}:{port}/ws");
-                        if let Ok(tcp_stream) = TcpStream::connect((ip.as_str(), port)) {
+                    if let Some((ref ips, port)) = peer {
+                        let mut tcp_stream = None;
+                        let mut chosen_ip = String::new();
+                        for ip in ips {
+                            if let Ok(stream) = TcpStream::connect((ip.as_str(), port)) {
+                                tcp_stream = Some(stream);
+                                chosen_ip = ip.clone();
+                                break;
+                            }
+                        }
+
+                        if let Some(tcp_stream) = tcp_stream {
+                            let url = format!("wss://{chosen_ip}:{port}/ws");
                             // Generous timeout for the TLS + WebSocket handshakes
                             let _ = tcp_stream.set_read_timeout(Some(Duration::from_millis(2000)));
                             let _ = tcp_stream.set_write_timeout(Some(Duration::from_millis(2000)));

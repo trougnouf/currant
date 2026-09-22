@@ -35,13 +35,20 @@ impl ServerCertVerifier for PinVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        // Bypasses the hostname check. Since the certificate is issued by our
-        // deterministic Root CA (derived from the token), possessing a valid
-        // certificate guarantees authentication regardless of the IP address
-        // the peer is currently using.
         let dummy = ServerName::try_from("currant.local").unwrap().to_owned();
-        self.inner
-            .verify_server_cert(end_entity, intermediates, &dummy, ocsp_response, now)
+        // Shift 'now' 1 day into the future to avoid CertificateNotValidYet errors
+        // due to clock skew, since both peers generate certs live with SystemTime::now().
+        let shifted_now = rustls::pki_types::UnixTime::since_unix_epoch(
+            std::time::Duration::from_secs(now.as_secs() + 86400),
+        );
+
+        self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            &dummy,
+            ocsp_response,
+            shifted_now,
+        )
     }
 
     fn verify_tls12_signature(

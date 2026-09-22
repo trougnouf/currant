@@ -82,7 +82,7 @@ fn open_source(
             };
             Some(Box::new(
                 HttpSeekableReader::new(
-                    &peer.ip,
+                    &peer.ips,
                     peer.http_port,
                     &track.id,
                     store.load_pairing_token(),

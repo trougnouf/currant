@@ -424,7 +424,7 @@ pub struct App {
     /// switch the active zone or forward intents to a remote Playback Target.
     pub zone_tx: Option<std::sync::mpsc::Sender<crate::zone::ZoneCommand>>,
 
-    pub active_zone: Option<String>,
+    pub active_zone: Option<currant_core::net::Peer>,
     pub remote_state: Option<Arc<std::sync::Mutex<Option<currant_core::control::ControlResponse>>>>,
 
     dirty: bool,
@@ -726,7 +726,12 @@ impl App {
 
     fn cycle_zone(&mut self) {
         let peers = if let Some(ns) = &self.network_state {
-            ns.lock().unwrap().peers.keys().cloned().collect::<Vec<_>>()
+            ns.lock()
+                .unwrap()
+                .peers
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -740,37 +745,27 @@ impl App {
         }
 
         let mut sorted_peers = peers;
-        sorted_peers.sort();
+        sorted_peers.sort_by(|a, b| a.instance_id.cmp(&b.instance_id));
 
         let next_zone = match &self.active_zone {
             None => Some(sorted_peers[0].clone()),
-            Some(current) => {
-                let pos = sorted_peers.iter().position(|p| p == current).unwrap_or(0);
-                if pos + 1 < sorted_peers.len() {
-                    Some(sorted_peers[pos + 1].clone())
-                } else {
-                    None
-                }
-            }
+            Some(current) => match sorted_peers
+                .iter()
+                .position(|p| p.instance_id == current.instance_id)
+            {
+                Some(pos) if pos + 1 < sorted_peers.len() => Some(sorted_peers[pos + 1].clone()),
+                _ => None, // If missing or at the end, wrap around to local (None)
+            },
         };
 
         self.active_zone = next_zone.clone();
         if let Some(tx) = &self.zone_tx {
-            let peer_info = next_zone.as_ref().and_then(|id| {
-                self.network_state
-                    .as_ref()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .peers
-                    .get(id)
-                    .map(|p| (p.ip.clone(), p.ws_port))
-            });
+            let peer_info = next_zone.as_ref().map(|p| (p.ips.clone(), p.ws_port));
             let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
         }
 
         if let Some(z) = &self.active_zone {
-            self.status = format!("zone: {z}");
+            self.status = format!("zone: {}", z.name);
         } else {
             self.status = "zone: local".into();
         }
@@ -778,7 +773,12 @@ impl App {
 
     fn transfer_zone(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         let peers = if let Some(ns) = &self.network_state {
-            ns.lock().unwrap().peers.keys().cloned().collect::<Vec<_>>()
+            ns.lock()
+                .unwrap()
+                .peers
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -788,18 +788,17 @@ impl App {
         }
 
         let mut sorted_peers = peers;
-        sorted_peers.sort();
+        sorted_peers.sort_by(|a, b| a.instance_id.cmp(&b.instance_id));
 
         let next_zone = match &self.active_zone {
             None => Some(sorted_peers[0].clone()),
-            Some(current) => {
-                let pos = sorted_peers.iter().position(|p| p == current).unwrap_or(0);
-                if pos + 1 < sorted_peers.len() {
-                    Some(sorted_peers[pos + 1].clone())
-                } else {
-                    None // wrap around to local
-                }
-            }
+            Some(current) => match sorted_peers
+                .iter()
+                .position(|p| p.instance_id == current.instance_id)
+            {
+                Some(pos) if pos + 1 < sorted_peers.len() => Some(sorted_peers[pos + 1].clone()),
+                _ => None, // If missing or at the end, wrap around to local (None)
+            },
         };
 
         // 1. Gather state
@@ -829,16 +828,7 @@ impl App {
         // 3. Switch zone
         self.active_zone = next_zone.clone();
         if let Some(tx) = &self.zone_tx {
-            let peer_info = next_zone.as_ref().and_then(|id| {
-                self.network_state
-                    .as_ref()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .peers
-                    .get(id)
-                    .map(|p| (p.ip.clone(), p.ws_port))
-            });
+            let peer_info = next_zone.as_ref().map(|p| (p.ips.clone(), p.ws_port));
             let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
         }
 
@@ -859,7 +849,7 @@ impl App {
         }
 
         if let Some(z) = &self.active_zone {
-            self.status = format!("transferred to zone: {z}");
+            self.status = format!("transferred to zone: {}", z.name);
         } else {
             self.status = "transferred to local zone".into();
         }
