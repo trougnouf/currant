@@ -296,6 +296,7 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   **Tombstones:** A new `tombstones` table tracks `(logical_id, deleted_at)` when tracks are removed.
 *   **Delta Sync Payload:** When Node A connects to Node B, it requests `GET /sync?since=<last_sync_timestamp>`. Node B returns a compact JSON payload containing *only* the tracks modified/added, and the IDs deleted, since that exact timestamp. Only available tracks (see 8.2) are served, so a peer never receives metadata for tracks it cannot stream.
 *   **Tombstone Apply:** When a peer's tombstones are applied, the peer's `track_sources` rows for those logical ids are deleted and logical tracks left with no sources are removed from `tracks`, so ghost metadata is cleared once the last peer syncs the removal.
+*   **Stale Peer Eviction:** On startup, the catalog automatically purges remote catalogs (and local tombstones) that haven't successfully synced in the last 30 days. This prevents unbounded database growth from permanently dead peers or infinite tombstone accumulation. When an evicted peer reconnects, it simply triggers a full sync (`since=0`).
 *   **Conflict Resolution:** For user data (`rating`, `play_count`), the highest `last_played` timestamp wins, ensuring offline plays sync safely across devices.
 
 ### 8.4. Playback Targets & Zones

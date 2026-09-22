@@ -172,11 +172,16 @@ impl LibraryStore {
         register_fold(&read_conn)?;
 
         let instance_id = Self::instance_id_on(&conn);
-        Ok(Self {
+        let store = Self {
             conn: Mutex::new(conn),
             read_conn: Some(Mutex::new(read_conn)),
             instance_id,
-        })
+        };
+
+        // Evict peers and tombstones older than 30 days
+        store.evict_stale_peers(30 * 24 * 60 * 60);
+
+        Ok(store)
     }
 
     /// An in-memory catalog, useful for tests.
@@ -1053,6 +1058,66 @@ impl LibraryStore {
 
     // --- mesh delta synchronization ---
 
+    /// Evict peers that haven't synced in `max_age_secs`. Drops their physical
+    /// sources, orphaned logical tracks, and old tombstones to prevent unbounded
+    /// database growth. Returns the number of peers evicted.
+    pub fn evict_stale_peers(&self, max_age_secs: i64) -> usize {
+        let conn = self.write_conn();
+        let now = unix_now();
+        let cutoff = now - max_age_secs;
+
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM kv WHERE key LIKE 'sync_last_%'")
+            .unwrap();
+        let stale_keys: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .flatten()
+            .filter(|(_, v)| v.parse::<i64>().unwrap_or(0) < cutoff)
+            .collect();
+        drop(stmt);
+
+        if stale_keys.is_empty() {
+            // Still prune old tombstones even if no peers were evicted
+            let _ = conn.execute(
+                "DELETE FROM tombstones WHERE deleted_at < ?1",
+                rusqlite::params![cutoff],
+            );
+            return 0;
+        }
+
+        conn.execute_batch("BEGIN IMMEDIATE").ok();
+        let mut evicted = 0;
+
+        for (key, _) in stale_keys {
+            let peer_id = key.strip_prefix("sync_last_").unwrap_or("");
+            if peer_id.is_empty() {
+                continue;
+            }
+
+            let _ = conn.execute(
+                "DELETE FROM track_sources WHERE instance_id = ?1",
+                rusqlite::params![peer_id],
+            );
+            let _ = conn.execute("DELETE FROM kv WHERE key = ?1", rusqlite::params![key]);
+            evicted += 1;
+        }
+
+        let _ = conn.execute(
+            "DELETE FROM tracks WHERE id NOT IN (SELECT logical_id FROM track_sources)",
+            [],
+        );
+        let _ = conn.execute(
+            "DELETE FROM tombstones WHERE deleted_at < ?1",
+            rusqlite::params![cutoff],
+        );
+        conn.execute_batch("COMMIT").ok();
+
+        evicted
+    }
+
     /// High-water mark (unix seconds) of the last completed sync from a peer.
     pub fn get_last_sync(&self, peer_id: &str) -> i64 {
         self.kv_get(&format!("sync_last_{peer_id}"))
@@ -1798,6 +1863,43 @@ mod tests {
         let got = store.get_track("2").unwrap();
         assert_eq!(got.path, "/a.mp3");
         assert!(got.is_local);
+    }
+
+    #[test]
+    fn evicts_stale_peers_and_tombstones() {
+        let store = LibraryStore::open_memory().unwrap();
+
+        let remote = t("1", "Remote", "Artist", "Album", 2000);
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![remote],
+                tombstones: vec![],
+            },
+        );
+        store.set_last_sync("peer-1", unix_now() - 40 * 86400); // 40 days ago
+
+        let _ = store.write_conn().execute(
+            "INSERT INTO tombstones (logical_id, deleted_at) VALUES ('ghost', ?1)",
+            rusqlite::params![unix_now() - 40 * 86400],
+        );
+
+        assert_eq!(store.evict_stale_peers(30 * 86400), 1);
+
+        // The remote track is fully deleted from the database
+        let count: i64 = store
+            .write_conn()
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(store.get_last_sync("peer-1"), 0);
+
+        // Old tombstone is cleared
+        let tomb_count: i64 = store
+            .write_conn()
+            .query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tomb_count, 0);
     }
 
     #[test]
