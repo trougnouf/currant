@@ -66,14 +66,27 @@ CREATE INDEX IF NOT EXISTS idx_tracks_album_fold  ON tracks(album_fold);
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 
-CREATE VIEW IF NOT EXISTS tracks_with_local AS
+CREATE TABLE IF NOT EXISTS connected_peers (
+    instance_id TEXT PRIMARY KEY
+);
+
+CREATE VIEW IF NOT EXISTS available_tracks AS
 SELECT t.*,
        EXISTS(
            SELECT 1 FROM track_sources s
            WHERE s.logical_id = t.id
              AND s.instance_id = (SELECT value FROM kv WHERE key = 'instance_id')
        ) AS is_local
-FROM tracks t;
+FROM tracks t
+WHERE EXISTS (
+    SELECT 1 FROM track_sources s
+    WHERE s.logical_id = t.id
+      AND s.instance_id IN (
+          SELECT value FROM kv WHERE key = 'instance_id'
+          UNION
+          SELECT instance_id FROM connected_peers
+      )
+);
 ";
 
 /// Register the `fold` scalar function for accent-insensitive, case-insensitive
@@ -139,6 +152,7 @@ impl LibraryStore {
                 DROP TABLE IF EXISTS track_sources;
                 DROP TABLE IF EXISTS tombstones;
                 DROP VIEW IF EXISTS tracks_with_local;
+                DROP VIEW IF EXISTS available_tracks;
             ",
             )?;
             conn.execute(
@@ -375,7 +389,7 @@ impl LibraryStore {
         conn.query_row(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-             FROM tracks_with_local WHERE id = ?1",
+             FROM available_tracks WHERE id = ?1",
             rusqlite::params![id],
             row_to_track,
         )
@@ -385,7 +399,7 @@ impl LibraryStore {
     pub fn get_path(&self, id: &str) -> Option<String> {
         let conn = self.read_conn();
         conn.query_row(
-            "SELECT path FROM tracks WHERE id = ?1",
+            "SELECT path FROM track_sources WHERE logical_id = ?1 AND instance_id = (SELECT value FROM kv WHERE key = 'instance_id') LIMIT 1",
             rusqlite::params![id],
             |row| row.get::<_, String>(0),
         )
@@ -394,75 +408,69 @@ impl LibraryStore {
 
     pub fn track_count(&self) -> u64 {
         let conn = self.read_conn();
-        conn.query_row("SELECT COUNT(*) FROM tracks", [], |row| {
+        conn.query_row("SELECT COUNT(*) FROM available_tracks", [], |row| {
             row.get::<_, i64>(0)
         })
         .unwrap_or(0) as u64
     }
 
-    /// All known file paths, used by the scanner to prune removed files.
-    pub fn all_paths(&self) -> Vec<String> {
+    /// Map of local paths -> (file_mtime, logical_id), used by the scanner
+    /// for incremental rescans.
+    pub fn local_paths_info(&self) -> std::collections::HashMap<String, (i64, String)> {
         let conn = self.read_conn();
-        let mut stmt = conn.prepare("SELECT path FROM tracks").unwrap();
-        stmt.query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-    }
-
-    /// Map of path -> file_mtime, used by the scanner for incremental rescans.
-    pub fn paths_with_mtime(&self) -> std::collections::HashMap<String, i64> {
-        let conn = self.read_conn();
-        let mut stmt = match conn.prepare("SELECT path, file_mtime FROM tracks") {
+        let mut stmt = match conn.prepare("SELECT path, file_mtime, logical_id FROM track_sources WHERE instance_id = (SELECT value FROM kv WHERE key = 'instance_id')") {
             Ok(s) => s,
             Err(_) => return std::collections::HashMap::new(),
         };
         let rows = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })
             .unwrap();
         let mut map = std::collections::HashMap::new();
-        for (p, m) in rows.flatten() {
-            map.insert(p, m);
+        for (p, m, l) in rows.flatten() {
+            map.insert(p, (m, l));
         }
         map
     }
 
-    /// Delete tracks whose paths are not in `keep`. Batched in a transaction
-    /// so thousands of deletes commit in one pass instead of one fsync each.
-    pub fn prune(&self, keep: &std::collections::HashSet<String>) -> usize {
+    /// Delete local track sources whose (path, logical_id) are not in `keep`.
+    /// Batched in a transaction so thousands of deletes commit in one pass
+    /// instead of one fsync each. Orphaned logical tracks (no sources left)
+    /// are dropped too.
+    pub fn prune(&self, keep: &std::collections::HashSet<(String, String)>) -> usize {
         let conn = self.write_conn();
-        let mut stmt = match conn.prepare("SELECT path FROM tracks") {
+        let instance_id = self.instance_id.clone();
+        let mut stmt = match conn
+            .prepare("SELECT path, logical_id FROM track_sources WHERE instance_id = ?1")
+        {
             Ok(s) => s,
             Err(_) => return 0,
         };
-        let paths: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        let current_sources: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![instance_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .unwrap()
             .flatten()
             .collect();
         drop(stmt);
 
-        let to_delete: Vec<&String> = paths.iter().filter(|p| !keep.contains(*p)).collect();
-        if to_delete.is_empty() {
-            return 0;
-        }
         conn.execute_batch("BEGIN IMMEDIATE").ok();
         let mut deleted = 0;
         let now = unix_now();
-        for path in to_delete {
-            // Capture the logical ID so we can emit a tombstone, letting peers
-            // drop the track too once they receive the next delta sync.
-            if let Ok(logical_id) = conn.query_row(
-                "SELECT id FROM tracks WHERE path = ?1",
-                rusqlite::params![path],
-                |row| row.get::<_, String>(0),
-            ) {
+        for (path, logical_id) in current_sources {
+            if !keep.contains(&(path.clone(), logical_id.clone())) {
+                // Emit a tombstone so peers drop this instance's source for
+                // the track once they receive the next delta sync.
                 let rows = conn
                     .execute(
-                        "DELETE FROM tracks WHERE path = ?1",
-                        rusqlite::params![path],
+                        "DELETE FROM track_sources WHERE instance_id = ?1 AND path = ?2 AND logical_id = ?3",
+                        rusqlite::params![instance_id, path, logical_id],
                     )
                     .unwrap_or(0);
                 if rows > 0 {
@@ -474,6 +482,10 @@ impl LibraryStore {
                 }
             }
         }
+        let _ = conn.execute(
+            "DELETE FROM tracks WHERE id NOT IN (SELECT logical_id FROM track_sources)",
+            [],
+        );
         conn.execute_batch("COMMIT").ok();
         deleted
     }
@@ -501,7 +513,7 @@ impl LibraryStore {
         let sql = format!(
             "SELECT pos FROM (
                 SELECT id, ROW_NUMBER() OVER (ORDER BY {order}) AS pos
-                FROM tracks {where_sql}
+                FROM available_tracks {where_sql}
             ) WHERE id = ?"
         );
         let mut all_params: Vec<&dyn rusqlite::ToSql> = params_as_dyn(&frag.params);
@@ -532,19 +544,19 @@ impl LibraryStore {
         };
 
         let total: u64 = if frag.where_clause.is_empty() {
-            conn.query_row("SELECT COUNT(*) FROM tracks", [], |row| {
+            conn.query_row("SELECT COUNT(*) FROM available_tracks", [], |row| {
                 row.get::<_, i64>(0)
             })
             .unwrap_or(0) as u64
         } else {
-            let sql = format!("SELECT COUNT(*) FROM tracks {where_sql}");
+            let sql = format!("SELECT COUNT(*) FROM available_tracks {where_sql}");
             query_scalar_with_params(&conn, &sql, &frag.params)
         };
 
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-             FROM tracks_with_local {where_sql}
+             FROM available_tracks {where_sql}
              ORDER BY {order}
              LIMIT ? OFFSET ?"
         );
@@ -570,7 +582,9 @@ impl LibraryStore {
         } else {
             format!("WHERE {}", frag.where_clause)
         };
-        let sql = format!("SELECT id FROM tracks {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+        let sql = format!(
+            "SELECT id FROM available_tracks {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
+        );
         let mut all_params: Vec<&dyn rusqlite::ToSql> = params_as_dyn(&frag.params);
         let l = limit as i64;
         let o = offset as i64;
@@ -622,7 +636,7 @@ impl LibraryStore {
 
         // Pick a random album by name.
         let pick_sql = format!(
-            "SELECT album_artist, album FROM tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
+            "SELECT album_artist, album FROM available_tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
         );
         let mut all_params: Vec<SqlParam> = frag.params.clone();
         all_params.extend(exclude_params);
@@ -656,7 +670,7 @@ impl LibraryStore {
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-             FROM tracks_with_local WHERE {track_where}
+             FROM available_tracks WHERE {track_where}
              ORDER BY track_number, title"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -701,7 +715,7 @@ impl LibraryStore {
         let sql = format!(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-             FROM tracks_with_local WHERE {where_clause}
+             FROM available_tracks WHERE {where_clause}
              ORDER BY track_number, title"
         );
         let mut stmt = match conn.prepare(&sql) {
@@ -734,7 +748,7 @@ impl LibraryStore {
                     album_artist AS artist,
                     album, MAX(year) AS year, COUNT(*) AS track_count,
                     SUM(duration_secs) AS total
-                 FROM tracks {where_sql}
+                 FROM available_tracks {where_sql}
                  GROUP BY album_artist, album
             ) ORDER BY fold(artist), fold(album)"
         );
@@ -778,7 +792,7 @@ impl LibraryStore {
         let sql = format!(
             "SELECT * FROM (
                 SELECT album_artist AS artist, COUNT(DISTINCT album) AS album_count, COUNT(*) AS track_count
-                 FROM tracks {where_sql}
+                 FROM available_tracks {where_sql}
                  GROUP BY album_artist
             ) ORDER BY fold(artist)"
         );
@@ -813,7 +827,7 @@ impl LibraryStore {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-                   FROM tracks_with_local WHERE album_artist = ?1 AND album = ?2
+                   FROM available_tracks WHERE album_artist = ?1 AND album = ?2
                    ORDER BY track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -832,7 +846,7 @@ impl LibraryStore {
         let conn = self.read_conn();
         let sql = "SELECT id, path, title, artist, album_artist, album, genre, comment,
                           track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-                   FROM tracks_with_local WHERE artist = ?1
+                   FROM available_tracks WHERE artist = ?1
                    ORDER BY album, track_number, title";
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -853,7 +867,7 @@ impl LibraryStore {
                 album_artist AS artist,
                 album, MAX(year) AS year, COUNT(*) AS track_count,
                 SUM(duration_secs) AS total
-             FROM tracks WHERE album_artist = ?1
+             FROM available_tracks WHERE album_artist = ?1
              GROUP BY album_artist, album
              ORDER BY MIN(album), album";
         let mut stmt = match conn.prepare(sql) {
@@ -1021,6 +1035,22 @@ impl LibraryStore {
         })
     }
 
+    pub fn add_connected_peer(&self, peer_id: &str) {
+        let conn = self.write_conn();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO connected_peers (instance_id) VALUES (?1)",
+            rusqlite::params![peer_id],
+        );
+    }
+
+    pub fn remove_connected_peer(&self, peer_id: &str) {
+        let conn = self.write_conn();
+        let _ = conn.execute(
+            "DELETE FROM connected_peers WHERE instance_id = ?1",
+            rusqlite::params![peer_id],
+        );
+    }
+
     // --- mesh delta synchronization ---
 
     /// High-water mark (unix seconds) of the last completed sync from a peer.
@@ -1043,7 +1073,7 @@ impl LibraryStore {
         if let Ok(mut stmt) = conn.prepare(
             "SELECT id, path, title, artist, album_artist, album, genre, comment,
                     track_number, year, duration_secs, rating, play_count, last_played, file_mtime, updated_at, is_local
-             FROM tracks_with_local WHERE updated_at > ?1",
+             FROM available_tracks WHERE updated_at > ?1",
         )
             && let Ok(rows) = stmt.query(rusqlite::params![since]) {
                 tracks.extend(rows.mapped(row_to_track).flatten());
@@ -1151,18 +1181,23 @@ impl LibraryStore {
             );
         }
 
+        let _ = tx.execute(
+            "DELETE FROM tracks WHERE id NOT IN (SELECT logical_id FROM track_sources)",
+            [],
+        );
+
         tx.commit().unwrap();
     }
 
-    /// Resolves the first remote peer that holds a source for this track,
-    /// used to pick where to stream it from. `None` when no other instance
-    /// has a copy.
+    /// Resolves the first connected peer that holds a source for this track,
+    /// used to pick where to stream it from. `None` when no connected
+    /// instance has a copy.
     pub fn get_remote_source_peer(&self, logical_id: &str) -> Option<String> {
         let conn = self.read_conn();
         conn.query_row(
             "SELECT instance_id FROM track_sources
              WHERE logical_id = ?1
-               AND instance_id != (SELECT value FROM kv WHERE key = 'instance_id')
+               AND instance_id IN (SELECT instance_id FROM connected_peers)
              LIMIT 1",
             rusqlite::params![logical_id],
             |r| r.get::<_, String>(0),
@@ -1353,18 +1388,35 @@ fn migrate(conn: &Connection) {
         [],
     );
 
-    // Dynamic view for source resolution: exposes `is_local` (does this
-    // instance own a physical copy of the track?) without repeating the
-    // JOIN in every track query.
+    // Availability view: exposes `is_local` and hides logical tracks that no
+    // connected instance holds a physical copy of. `connected_peers` is
+    // session state, so it is cleared on every boot and re-populated by mDNS
+    // discovery.
     let _ = conn.execute(
-        "CREATE VIEW IF NOT EXISTS tracks_with_local AS
+        "CREATE TABLE IF NOT EXISTS connected_peers (instance_id TEXT PRIMARY KEY)",
+        [],
+    );
+    let _ = conn.execute("DELETE FROM connected_peers", []);
+    let _ = conn.execute("DROP VIEW IF EXISTS tracks_with_local", []);
+
+    let _ = conn.execute(
+        "CREATE VIEW IF NOT EXISTS available_tracks AS
          SELECT t.*,
                 EXISTS(
                     SELECT 1 FROM track_sources s
                     WHERE s.logical_id = t.id
                       AND s.instance_id = (SELECT value FROM kv WHERE key = 'instance_id')
                 ) AS is_local
-         FROM tracks t",
+         FROM tracks t
+         WHERE EXISTS (
+             SELECT 1 FROM track_sources s
+             WHERE s.logical_id = t.id
+               AND s.instance_id IN (
+                   SELECT value FROM kv WHERE key = 'instance_id'
+                   UNION
+                   SELECT instance_id FROM connected_peers
+               )
+         )",
         [],
     );
 
@@ -1660,6 +1712,7 @@ mod tests {
                 tombstones: vec![],
             },
         );
+        store.add_connected_peer("peer-1");
 
         let got = store.get_track("1").unwrap();
         assert_eq!(got.title, "So What (Take 2)");
@@ -1702,6 +1755,7 @@ mod tests {
                 tombstones: vec![],
             },
         );
+        store.add_connected_peer("peer-1");
         assert_eq!(store.get_remote_source_peer("1").as_deref(), Some("peer-1"));
 
         // Peer deletes the file: the tombstone drops only the peer's source.
@@ -1718,5 +1772,63 @@ mod tests {
         let got = store.get_track("1").unwrap();
         assert!(got.is_local);
         assert_eq!(store.get_local_source_path("1"), Some(local.path));
+    }
+
+    #[test]
+    fn in_place_metadata_edit_prunes_ghost_source() {
+        let store = LibraryStore::open_memory().unwrap();
+        // Initial scan: a file at /a.mp3 tagged "Old".
+        let mut old = t("1", "Old", "Miles Davis", "Kind of Blue", 1959);
+        old.path = "/a.mp3".into();
+        store.upsert_track(&old).unwrap();
+
+        // In-place metadata edit: same path, new title -> new logical id.
+        let mut new = t("2", "New", "Miles Davis", "Kind of Blue", 1959);
+        new.path = "/a.mp3".into();
+        new.file_mtime = 100;
+        store.upsert_track(&new).unwrap();
+
+        // The scanner keeps only the (path, logical_id) pair found on disk.
+        let keep = std::collections::HashSet::from([("/a.mp3".to_string(), new.id.clone())]);
+        assert_eq!(store.prune(&keep), 1);
+
+        // The ghost logical track and its source are gone; the new one
+        // survives with its local source.
+        assert!(store.get_track("1").is_none());
+        let got = store.get_track("2").unwrap();
+        assert_eq!(got.path, "/a.mp3");
+        assert!(got.is_local);
+    }
+
+    #[test]
+    fn tracks_of_disconnected_peers_are_hidden() {
+        let store = LibraryStore::open_memory().unwrap();
+        store
+            .upsert_track(&t("1", "So What", "Miles Davis", "Kind of Blue", 1959))
+            .unwrap();
+
+        // A peer syncs a track only it holds.
+        let remote = t("2", "Remote Only", "Peer Artist", "Remote Album", 2001);
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![remote],
+                tombstones: vec![],
+            },
+        );
+
+        // Peer disconnected: the remote track is not available.
+        assert_eq!(store.track_count(), 1);
+        assert!(store.get_track("2").is_none());
+        assert_eq!(store.get_remote_source_peer("2"), None);
+
+        // Peer connects: the remote track becomes available.
+        store.add_connected_peer("peer-1");
+        assert_eq!(store.track_count(), 2);
+        assert_eq!(store.get_remote_source_peer("2").as_deref(), Some("peer-1"));
+
+        // Peer disconnects: hidden again.
+        store.remove_connected_peer("peer-1");
+        assert_eq!(store.track_count(), 1);
     }
 }

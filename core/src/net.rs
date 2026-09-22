@@ -211,6 +211,7 @@ pub fn start_network(
             .build(),
     );
 
+    let loop_store = store.clone();
     thread::spawn(move || {
         while let Ok(event) = receiver.recv() {
             match event {
@@ -255,10 +256,11 @@ pub fn start_network(
                                 },
                             );
                         }
+                        loop_store.add_connected_peer(id);
 
                         // Pull the peer's catalog delta in the background.
                         let agent = sync_agent.clone();
-                        let sync_store = store.clone();
+                        let sync_store = loop_store.clone();
                         let peer_id = id.to_string();
                         thread::spawn(move || {
                             let since = sync_store.get_last_sync(&peer_id);
@@ -281,6 +283,7 @@ pub fn start_network(
                     let id = fullname.split('.').next().unwrap_or("");
                     let mut s = state_clone.lock().unwrap();
                     s.peers.remove(id);
+                    loop_store.remove_connected_peer(id);
                 }
                 _ => {}
             }

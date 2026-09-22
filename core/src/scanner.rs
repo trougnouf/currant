@@ -70,8 +70,8 @@ pub struct ScanReport {
 /// Scan `roots`, updating `store` incrementally. Live counts are written to
 /// `progress` so a UI can show feedback while the scan runs.
 pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgress) {
-    let existing = store.paths_with_mtime();
-    let mut keep: HashSet<String> = HashSet::new();
+    let existing = store.local_paths_info();
+    let mut keep: HashSet<(String, String)> = HashSet::new();
 
     let mut batch = Vec::new();
     let mut batch_added = 0;
@@ -96,17 +96,20 @@ pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgres
             }
             progress.scanned.fetch_add(1, Ordering::Relaxed);
             let path_str = path.to_string_lossy().to_string();
-            keep.insert(path_str.clone());
 
             let mtime = file_mtime(path).unwrap_or(0);
-            let prev = existing.get(&path_str).copied();
-            if prev == Some(mtime) {
+            let prev = existing.get(&path_str).cloned();
+            if let Some((prev_mtime, ref logical_id)) = prev
+                && prev_mtime == mtime
+            {
+                keep.insert((path_str.clone(), logical_id.clone()));
                 progress.unchanged.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
             match read_track(path, mtime) {
                 Ok(track) => {
+                    keep.insert((path_str.clone(), track.id.clone()));
                     batch.push(track);
                     if prev.is_some() {
                         batch_updated += 1;

@@ -20,7 +20,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 *   **LibraryStore** — embedded SQLite (WAL mode). Source of truth for the catalog. Two connections: one read-only (queries never block on writes), one for mutations.
 *   **PlayerController** — owns the live queue (in memory). Receives `PlayerIntent`s from frontends, applies state mutations, queries the store. Queue is snapshotted to the store on exit and restored on startup.
 *   **Audio backend** — frontend-owned. The TUI spawns a thread that polls the controller's `current_track` and `is_playing` fields, decodes the file, and feeds rodio. When `current_track` is `None` and `is_playing` is true, the audio thread calls `determine_next_track()` to pull from the queue. When paused, the thread also corks the OS-level output stream, so desktop media indicators (e.g. KDE's active playback indicator) reflect the paused state.
-*   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. New and changed tracks are upserted in batches of 500 inside a single transaction, so a full scan commits one fsync per batch instead of per track. Prunes removed files in a single transaction.
+*   **Scanner** — runs in a background thread. Reports progress via lock-free atomics (`ScanProgress`). Incremental: skips files whose mtime is unchanged since the last scan. New and changed tracks are upserted in batches of 500 inside a single transaction, so a full scan commits one fsync per batch instead of per track. Prunes stale local sources in a single transaction: any local `track_sources` row whose (path, logical_id) no longer exists on disk is deleted, a tombstone is emitted for that logical id, and logical tracks left with no sources are removed from `tracks`.
 *   **Directory watcher** — an optional background thread using `notify` monitors root directories for changes. Updates are debounced and fed into the incremental scanner, keeping the UI in sync without manual rescans.
 *   **Control socket & MPRIS** — the TUI listens on a Unix domain socket (`$XDG_RUNTIME_DIR/currant.sock`, mode 0600) for `currant-ctl`. Currant also implements MPRIS (Linux), SMTC (Windows), and Media Remote (macOS) using `souvlaki` for OS desktop integration (lock screen, tray icon, media keys).
 
@@ -65,7 +65,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 
 The `kv` table stores: `queue_snapshot` (JSON), `roots` (JSON array), `volume` (float), `smart_playlists` (JSON array), `scrobble_token` (string, empty = scrobbling disabled), `pairing_token` (string, UUID generated on first launch), `schema_version` (integer).
 
-On open, the store compares the stored `schema_version` against the current one. If it is older, the library tables (`tracks`, `track_sources`, `tombstones`, `tracks_with_local`) are dropped and the version bumped, forcing a fresh scan. The `kv` table is never touched, so user settings (roots, volume, token, playlists) survive the wipe. This guarantees deduplication correctness across breaking catalog changes (e.g. the switch from physical-path to metadata track IDs).
+On open, the store compares the stored `schema_version` against the current one. If it is older, the library tables (`tracks`, `track_sources`, `tombstones`) and views (`available_tracks`) are dropped and the version bumped, forcing a fresh scan. `connected_peers` is session state and is cleared on every boot. The `kv` table is never touched, so user settings (roots, volume, token, playlists) survive the wipe. This guarantees deduplication correctness across breaking catalog changes (e.g. the switch from physical-path to metadata track IDs).
 
 ---
 
@@ -288,12 +288,14 @@ To avoid transferring files that already exist locally (regardless of folder str
     2.  **Only Remote Sources Available:**
         *   If `prefer_remote_lossy` is `true`: Remote Lossy > Remote Lossless (minimizes bandwidth).
         *   If `prefer_remote_lossy` is `false`: Remote Lossless > Remote Lossy.
+*   **Availability:** A logical track is available only if a connected instance holds a physical copy — this instance, or a peer currently discovered via mDNS. Connectivity is tracked in the `connected_peers` table (session state: cleared on boot, populated when discovery resolves a peer, emptied when the peer disappears). All catalog reads go through the `available_tracks` view, so tracks whose only sources sit on disconnected peers are hidden until those peers reconnect. Remote source resolution likewise only considers sources on connected peers.
 
 ### 8.3. Strict Delta Synchronization
 To guarantee minimal data transfer, the SQLite database is **never** transferred whole. Syncs use High-Water Mark (HWM) timestamping.
 *   **Timestamps:** The `tracks` table tracks modifications via `updated_at`.
 *   **Tombstones:** A new `tombstones` table tracks `(logical_id, deleted_at)` when tracks are removed.
-*   **Delta Sync Payload:** When Node A connects to Node B, it requests `GET /sync?since=<last_sync_timestamp>`. Node B returns a compact JSON payload containing *only* the tracks modified/added, and the IDs deleted, since that exact timestamp.
+*   **Delta Sync Payload:** When Node A connects to Node B, it requests `GET /sync?since=<last_sync_timestamp>`. Node B returns a compact JSON payload containing *only* the tracks modified/added, and the IDs deleted, since that exact timestamp. Only available tracks (see 8.2) are served, so a peer never receives metadata for tracks it cannot stream.
+*   **Tombstone Apply:** When a peer's tombstones are applied, the peer's `track_sources` rows for those logical ids are deleted and logical tracks left with no sources are removed from `tracks`, so ghost metadata is cleared once the last peer syncs the removal.
 *   **Conflict Resolution:** For user data (`rating`, `play_count`), the highest `last_played` timestamp wins, ensuring offline plays sync safely across devices.
 
 ### 8.4. Playback Targets & Zones
