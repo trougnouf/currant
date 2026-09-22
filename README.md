@@ -31,6 +31,7 @@ Opus playback depends on libopus and libogg being installed on the system.
 
 ```
 currant-tui            # launch the player
+currant-tui --play     # launch and resume playback immediately
 currant-ctl status     # query playback state
 currant-ctl play-pause # toggle playback
 ```

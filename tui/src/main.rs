@@ -84,6 +84,8 @@ fn catalog_path() -> std::path::PathBuf {
 }
 
 fn main() -> Result<(), io::Error> {
+    let play_on_start = std::env::args().skip(1).any(|a| a == "--play");
+
     let store =
         Arc::new(LibraryStore::open(&catalog_path()).expect("failed to open library catalog"));
 
@@ -98,6 +100,10 @@ fn main() -> Result<(), io::Error> {
     }
     if let Some(v) = store.load_volume() {
         controller.lock().unwrap().volume = v;
+    }
+    if play_on_start {
+        // Resume playback of the restored session immediately.
+        controller.lock().unwrap().is_playing = true;
     }
 
     // Wire the scrobbler if a token is configured (empty = disabled).

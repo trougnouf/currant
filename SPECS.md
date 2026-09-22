@@ -11,7 +11,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 ### 1.1. Crates
 
 *   **`currant-core`** — pure logic: catalog (SQLite), query engine, scanner, controller, scrobble, control protocol. No audio, no UI.
-*   **`currant-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering. Exposes a control socket for `currant-ctl`.
+*   **`currant-tui`** — terminal frontend (ratatui + rodio). Owns audio playback and rendering. Exposes a control socket for `currant-ctl`. `--play` resumes playback of the restored session on launch.
 *   **`currant-ctl`** — remote control CLI. Connects to the TUI's control socket and dispatches `PlayerIntent`s or queries playback state.
 *   **Android (future)** — Kotlin + Media3/ExoPlayer, bound to core via uniffi.
 
