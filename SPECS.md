@@ -213,7 +213,7 @@ Track rows use fixed-width columns so fields align vertically. Column widths are
 *   **compact** — + album, rating
 *   **full** — + year, genre
 
-The active preset is persisted in the `kv` store (`view_preset`) whenever it is cycled and restored on launch; an unknown or missing value falls back to compact.
+The active preset is persisted in the `kv` store (`view_preset`) whenever it is cycled and restored on launch; an unknown or missing value falls back to full.
 
 ### 6.4. Settings pane
 

@@ -151,7 +151,7 @@ fn main() -> Result<(), io::Error> {
     app.view = match store.load_view_preset().as_str() {
         "minimal" => crate::app::ViewPreset::Minimal,
         "full" => crate::app::ViewPreset::Full,
-        _ => crate::app::ViewPreset::Compact,
+        _ => crate::app::ViewPreset::Full,
     };
     app.watcher_tx = Some(watcher_tx);
     app.network_state = Some(network_state);
