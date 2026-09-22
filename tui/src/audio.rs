@@ -80,9 +80,14 @@ fn open_source(
                 let state = network.lock().unwrap();
                 state.peers.get(&peer_id)?.clone()
             };
-            let url = format!("http://{}:{}/stream/{}", peer.ip, peer.http_port, track.id);
             Some(Box::new(
-                HttpSeekableReader::new(&url, store.load_pairing_token()).ok()?,
+                HttpSeekableReader::new(
+                    &peer.ip,
+                    peer.http_port,
+                    &track.id,
+                    store.load_pairing_token(),
+                )
+                .ok()?,
             ))
         }
     };

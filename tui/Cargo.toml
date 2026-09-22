@@ -30,6 +30,8 @@ notify = "8"
 lofty = "0.25"
 # WebSocket client for remote zone control (talks to a peer's /ws endpoint).
 tungstenite = "0.30.0"
+# Strict TLS for the zone control channel (peer cert is derived from the token).
+rustls = { version = "0.23", features = ["ring"] }
 
 [features]
 default = ["opus"]

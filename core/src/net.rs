@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Mesh networking: HTTP server for streaming/sync, WebSocket for control, and mDNS for discovery.
 
+pub mod auth;
 pub mod stream;
+pub mod tls;
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
@@ -40,7 +42,12 @@ pub fn start_network(
 
     // 1. Start HTTP Server (Media streaming & Delta sync)
     // Binding to port 0 lets the OS pick an available port.
-    let http_server = Server::http("0.0.0.0:0").expect("Failed to bind HTTP server");
+    let crypto = crate::net::tls::generate_crypto(&store.load_pairing_token());
+    let ssl_config = tiny_http::SslConfig {
+        certificate: crypto.leaf_pem,
+        private_key: crypto.key_pem,
+    };
+    let http_server = Server::https("0.0.0.0:0", ssl_config).expect("Failed to bind HTTPS server");
     let http_port = http_server
         .server_addr()
         .to_ip()
@@ -50,13 +57,16 @@ pub fn start_network(
     let http_store = store.clone();
     thread::spawn(move || {
         for request in http_server.incoming_requests() {
-            let expected_auth = format!("Bearer {}", http_store.load_pairing_token());
+            let token = http_store.load_pairing_token();
+            let uri = request.url();
             let req_auth = request
                 .headers()
                 .iter()
                 .find(|h| h.field.equiv("Authorization"))
-                .map(|h| h.value.as_str());
-            if req_auth != Some(expected_auth.as_str()) {
+                .map(|h| h.value.as_str())
+                .unwrap_or("");
+
+            if !crate::net::auth::verify_header(&token, uri, req_auth) {
                 let _ = request.respond(Response::empty(401));
                 continue;
             }
@@ -99,15 +109,17 @@ pub fn start_network(
             let c = ws_controller.clone();
             thread::spawn(move || {
                 let c_for_cb = c.clone();
+                let token = c_for_cb.lock().unwrap().store.load_pairing_token();
+                let tls_config = crate::net::tls::server_config(&token);
+                let tls_conn = rustls::ServerConnection::new(tls_config).unwrap();
+                let stream = rustls::StreamOwned::new(tls_conn, stream);
+
                 // The callback's error type is the HTTP response itself
                 // (tungstenite writes it back to the client), so it cannot be
                 // boxed.
                 #[allow(clippy::result_large_err)]
                 let callback = |req: &Request, response: WsResponse| {
-                    let expected = format!(
-                        "Bearer {}",
-                        c_for_cb.lock().unwrap().store.load_pairing_token()
-                    );
+                    let expected = format!("Bearer {}", token);
                     let auth = req
                         .headers()
                         .get("Authorization")
@@ -191,9 +203,11 @@ pub fn start_network(
 
     // Shared HTTP agent for delta sync, with a bounded timeout so an
     // unreachable peer can never hold the discovery thread hostage.
+    let tls_config = crate::net::tls::ureq_client_config();
     let sync_agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .tls_config(tls_config)
             .build(),
     );
 
@@ -245,11 +259,11 @@ pub fn start_network(
                         thread::spawn(move || {
                             let since = sync_store.get_last_sync(&peer_id);
                             let token = sync_store.load_pairing_token();
-                            let url = format!("http://{ip}:{http_p}/sync?since={since}");
-                            if let Ok(mut response) = agent
-                                .get(&url)
-                                .header("Authorization", &format!("Bearer {token}"))
-                                .call()
+                            let uri = format!("/sync?since={since}");
+                            let url = format!("https://{ip}:{http_p}{uri}");
+                            let auth_header = crate::net::auth::generate_header(&token, &uri);
+                            if let Ok(mut response) =
+                                agent.get(&url).header("Authorization", &auth_header).call()
                                 && let Ok(payload) =
                                     response.body_mut().read_json::<crate::model::SyncPayload>()
                             {

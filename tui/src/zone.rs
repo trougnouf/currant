@@ -22,7 +22,9 @@ pub fn spawn(
 ) {
     std::thread::spawn(move || {
         let mut current_peer: Option<(String, u16)>;
-        let mut socket: Option<tungstenite::WebSocket<TcpStream>> = None;
+        let mut socket: Option<
+            tungstenite::WebSocket<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>,
+        > = None;
 
         loop {
             // Sleep/timeout: Fast polling when connected, sleep until command when disconnected.
@@ -39,20 +41,34 @@ pub fn spawn(
                     *remote_state.lock().unwrap() = None;
 
                     if let Some((ref ip, port)) = current_peer {
-                        let url = format!("ws://{ip}:{port}/ws");
-                        if let Ok(stream) = TcpStream::connect((ip.as_str(), port)) {
-                            // Timeouts ensure reads/writes don't hang if the peer vanishes
-                            let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
-                            let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
+                        let url = format!("wss://{ip}:{port}/ws");
+                        if let Ok(tcp_stream) = TcpStream::connect((ip.as_str(), port)) {
+                            // Generous timeout for the TLS + WebSocket handshakes
+                            let _ = tcp_stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                            let _ = tcp_stream.set_write_timeout(Some(Duration::from_millis(2000)));
+
+                            let token = store.load_pairing_token();
+                            let tls_config = currant_core::net::tls::rustls_client_config(&token);
+                            let server_name =
+                                rustls::pki_types::ServerName::try_from("currant.local")
+                                    .unwrap()
+                                    .to_owned();
+                            let tls_conn =
+                                rustls::ClientConnection::new(tls_config, server_name).unwrap();
+                            let stream = rustls::StreamOwned::new(tls_conn, tcp_stream);
+
                             let req = tungstenite::http::Request::builder()
                                 .uri(&url)
-                                .header(
-                                    "Authorization",
-                                    format!("Bearer {}", store.load_pairing_token()),
-                                )
+                                .header("Authorization", format!("Bearer {}", token))
                                 .body(())
                                 .unwrap();
                             if let Ok((mut ws, _)) = client::client(req, stream) {
+                                // Drop the timeout back down to 50ms for the fast non-blocking poll loop
+                                let inner_tcp = ws.get_mut().get_mut();
+                                let _ = inner_tcp.set_read_timeout(Some(Duration::from_millis(50)));
+                                let _ =
+                                    inner_tcp.set_write_timeout(Some(Duration::from_millis(50)));
+
                                 // Request initial state
                                 if let Ok(json) = serde_json::to_string(&ControlRequest::Status) {
                                     let _ = ws.write(Message::text(json));

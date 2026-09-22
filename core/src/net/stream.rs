@@ -20,7 +20,7 @@ impl<T: Read + Seek + Send + Sync + ?Sized> Seekable for T {}
 /// lifetimes inside the decoder, at the cost of a round trip per chunk.
 pub struct HttpSeekableReader {
     url: String,
-    token: String,
+    auth_header: String,
     agent: ureq::Agent,
     cursor: u64,
     /// Total length from the `HEAD` request. Zero when the peer didn't
@@ -29,24 +29,29 @@ pub struct HttpSeekableReader {
 }
 
 impl HttpSeekableReader {
-    /// Open the remote file at `url`. A `HEAD` request learns the total
-    /// length; if it fails, the reader falls back to unbounded ranges.
-    pub fn new(url: &str, token: String) -> io::Result<Self> {
+    /// Open the remote file. A `HEAD` request learns the total length; if
+    /// it fails, the reader falls back to unbounded ranges.
+    pub fn new(ip: &str, port: u16, track_id: &str, token: String) -> io::Result<Self> {
+        let uri = format!("/stream/{track_id}");
+        let url = format!("https://{ip}:{port}{uri}");
+        let tls_config = crate::net::tls::ureq_client_config();
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
                 .timeout_global(Some(Duration::from_secs(30)))
+                .tls_config(tls_config)
                 .build(),
         );
+        let auth_header = crate::net::auth::generate_header(&token, &uri);
         let total = agent
-            .head(url)
-            .header("Authorization", &format!("Bearer {}", token))
+            .head(&url)
+            .header("Authorization", &auth_header)
             .call()
             .ok()
             .and_then(|response| response.body().content_length())
             .unwrap_or(0);
         Ok(Self {
-            url: url.to_string(),
-            token,
+            url,
+            auth_header,
             agent,
             cursor: 0,
             total,
@@ -70,7 +75,7 @@ impl Read for HttpSeekableReader {
         let mut response = self
             .agent
             .get(&self.url)
-            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Authorization", &self.auth_header)
             .header("Range", &format!("bytes={}-{}", self.cursor, end))
             .call()
             .map_err(|e| io::Error::other(e.to_string()))?;

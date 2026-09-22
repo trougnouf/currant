@@ -21,9 +21,14 @@ ureq = { version = "3.4", features = ["json"] } # scrobbler HTTP (Listenbrainz, 
 unicode-normalization = "0.1" # accent-insensitive search
 
 uniffi = { version = "0.32", optional = true }
-tiny_http = "0.12.0"
+tiny_http = { version = "0.12.0", features = ["ssl-rustls"] } # HTTPS media server, token-derived certs
 tungstenite = "0.30.0"
 mdns-sd = "0.21.3"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pki-types = "1.15"
+rcgen = "0.14"
+sha2 = "0.11"
+hmac = "0.13"
 
 [features]
 android = ["uniffi"]
