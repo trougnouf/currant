@@ -156,6 +156,9 @@ pub enum SortPreset {
     /// Pick a random track, then play its album in track order (albums are
     /// weighted by track count).
     RandomAlbum,
+    /// Pick a random album by name (every album equally likely), then play it
+    /// in track order.
+    RandomAlbumEven,
     /// Order by file path, then title (used by the files tab).
     Path,
 }

@@ -1623,7 +1623,10 @@ impl App {
                 };
                 let expr = parse_query(&self.search);
                 let radio_sort = c.dynamic_sort();
-                let is_radio = matches!(radio_sort, SortPreset::Random | SortPreset::RandomAlbum);
+                let is_radio = matches!(
+                    radio_sort,
+                    SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumEven
+                );
 
                 if let Some(id) = self.selected_track_id(c) {
                     if is_radio {
@@ -1773,7 +1776,7 @@ impl App {
             SortPreset::MostPlayed => SortPreset::HighestRated,
             SortPreset::HighestRated => SortPreset::Random,
             SortPreset::Random => SortPreset::ArtistAlbumTrack,
-            SortPreset::RandomAlbum => SortPreset::ArtistAlbumTrack,
+            SortPreset::RandomAlbum | SortPreset::RandomAlbumEven => SortPreset::ArtistAlbumTrack,
             SortPreset::Path => SortPreset::ArtistAlbumTrack,
         };
         self.invalidate_list();
@@ -1782,10 +1785,14 @@ impl App {
 
     fn toggle_radio(&mut self, c: &mut MutexGuard<'_, PlayerController>) {
         let next = match c.dynamic_sort() {
-            SortPreset::RandomAlbum => SortPreset::Random,
+            SortPreset::RandomAlbum => SortPreset::RandomAlbumEven,
+            SortPreset::RandomAlbumEven => SortPreset::Random,
             SortPreset::Random => {
                 // Turn radio off — use the list sort, but never a random one.
-                if matches!(self.sort, SortPreset::Random | SortPreset::RandomAlbum) {
+                if matches!(
+                    self.sort,
+                    SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumEven
+                ) {
                     SortPreset::ArtistAlbumTrack
                 } else {
                     self.sort
@@ -1795,7 +1802,10 @@ impl App {
         };
         let expr = parse_query(&self.search);
         c.set_dynamic_source(expr, next);
-        self.status = if matches!(next, SortPreset::Random | SortPreset::RandomAlbum) {
+        self.status = if matches!(
+            next,
+            SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumEven
+        ) {
             format!("radio: {}", sort_label(next))
         } else {
             "radio: off".into()
@@ -2233,6 +2243,7 @@ pub fn sort_label(sort: SortPreset) -> &'static str {
         SortPreset::HighestRated => "highest rated",
         SortPreset::Random => "random",
         SortPreset::RandomAlbum => "random album",
+        SortPreset::RandomAlbumEven => "random album (even)",
         SortPreset::Path => "path",
     }
 }

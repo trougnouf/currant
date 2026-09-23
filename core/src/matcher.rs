@@ -171,7 +171,7 @@ pub fn sort_to_order_by(sort: SortPreset) -> &'static str {
         SortPreset::Random => "RANDOM()",
         // Random album is handled by the controller (it picks an album first);
         // here it degrades to a random track order.
-        SortPreset::RandomAlbum => "RANDOM()",
+        SortPreset::RandomAlbum | SortPreset::RandomAlbumEven => "RANDOM()",
         SortPreset::Path => "path, title",
     }
 }

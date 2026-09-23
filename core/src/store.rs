@@ -504,7 +504,10 @@ impl LibraryStore {
         expr: &matcher::SearchExpr,
         sort: SortPreset,
     ) -> Option<u64> {
-        if matches!(sort, SortPreset::Random | SortPreset::RandomAlbum) {
+        if matches!(
+            sort,
+            SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumEven
+        ) {
             return None;
         }
         let frag = expr.to_sql();
@@ -608,12 +611,15 @@ impl LibraryStore {
             .collect()
     }
 
-    /// Random album: pick a random track, return the tracks of its album in
-    /// track order. Albums are weighted by track count.
+    /// Random album: pick an album, return its tracks in track order. With
+    /// `weighted`, a random track is picked and its album taken, so albums
+    /// are weighted by track count. Without, a random album by name is
+    /// picked, so every album is equally likely.
     pub fn random_album_tracks(
         &self,
         expr: &matcher::SearchExpr,
         exclude: Option<(&str, &str)>,
+        weighted: bool,
     ) -> Vec<Track> {
         let frag = expr.to_sql();
         let conn = self.read_conn();
@@ -640,11 +646,18 @@ impl LibraryStore {
             format!("WHERE {}{exclude_clause}", frag.where_clause)
         };
 
-        // Pick a random track and take its album, so albums are weighted by
-        // track count (a 30-track album is 30x as likely as a single).
-        let pick_sql = format!(
-            "SELECT album_artist, album FROM available_tracks {where_sql} ORDER BY RANDOM() LIMIT 1"
-        );
+        // Weighted: pick a random track and take its album, so a 30-track
+        // album is 30x as likely as a single. Unweighted: pick a random
+        // album by name, so every album has an equal chance.
+        let pick_sql = if weighted {
+            format!(
+                "SELECT album_artist, album FROM available_tracks {where_sql} ORDER BY RANDOM() LIMIT 1"
+            )
+        } else {
+            format!(
+                "SELECT album_artist, album FROM available_tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
+            )
+        };
         let mut all_params: Vec<SqlParam> = frag.params.clone();
         all_params.extend(exclude_params);
         let album_info: Option<(String, String)> = if all_params.is_empty() {
@@ -1634,15 +1647,13 @@ mod tests {
         let artists = store.artists(&parse_query(""));
         assert_eq!(artists.len(), 2);
 
-        let ra = store.random_album_tracks(&parse_query(""), None);
+        let ra = store.random_album_tracks(&parse_query(""), None, true);
         assert!(!ra.is_empty());
     }
 
-    #[test]
-    fn random_album_weighted_by_track_count() {
+    /// One 100-track album ("Kind of Blue") plus one single ("Singles").
+    fn album_pick_fixture() -> LibraryStore {
         let store = LibraryStore::open_memory().unwrap();
-        // One 100-track album and one single: the single's album should be
-        // picked ~1/101 of the time, not 1/2 (uniform per album).
         for i in 0..100 {
             store
                 .upsert_track(&t(
@@ -1657,18 +1668,38 @@ mod tests {
         store
             .upsert_track(&t("s", "single", "John Coltrane", "Singles", 1960))
             .unwrap();
+        store
+    }
 
-        let mut single_picks = 0;
-        for _ in 0..10_000 {
-            let ra = store.random_album_tracks(&parse_query(""), None);
-            if matches!(ra.first().map(|tr| tr.album.as_str()), Some("Singles")) {
-                single_picks += 1;
-            }
-        }
-        // Expected ~99; 1000 is ~90 standard deviations away. Under the old
-        // uniform-per-album behavior this would be ~5000.
+    fn count_single_picks(store: &LibraryStore, weighted: bool, n: usize) -> usize {
+        (0..n)
+            .filter(|_| {
+                let ra = store.random_album_tracks(&parse_query(""), None, weighted);
+                matches!(ra.first().map(|tr| tr.album.as_str()), Some("Singles"))
+            })
+            .count()
+    }
+
+    #[test]
+    fn random_album_weighted_by_track_count() {
+        // The single's album should be picked ~1/101 of the time, not 1/2.
+        let store = album_pick_fixture();
+        let single_picks = count_single_picks(&store, true, 10_000);
+        // Expected ~99; 1000 is ~90 standard deviations away.
         assert!(
             single_picks < 1000,
+            "single picked {single_picks}/10000 times"
+        );
+    }
+
+    #[test]
+    fn random_album_even_per_album() {
+        // Every album is equally likely: the single should be picked ~1/2.
+        let store = album_pick_fixture();
+        let single_picks = count_single_picks(&store, false, 10_000);
+        // Expected ~5000; 4000 is ~20 standard deviations away.
+        assert!(
+            single_picks > 4000,
             "single picked {single_picks}/10000 times"
         );
     }
