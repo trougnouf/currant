@@ -153,7 +153,8 @@ pub enum SortPreset {
     MostPlayed,
     HighestRated,
     Random,
-    /// Pick one album at random, then play it in track order.
+    /// Pick a random track, then play its album in track order (albums are
+    /// weighted by track count).
     RandomAlbum,
     /// Order by file path, then title (used by the files tab).
     Path,

@@ -608,7 +608,8 @@ impl LibraryStore {
             .collect()
     }
 
-    /// Random album: pick one album, return its tracks in track order.
+    /// Random album: pick a random track, return the tracks of its album in
+    /// track order. Albums are weighted by track count.
     pub fn random_album_tracks(
         &self,
         expr: &matcher::SearchExpr,
@@ -639,9 +640,10 @@ impl LibraryStore {
             format!("WHERE {}{exclude_clause}", frag.where_clause)
         };
 
-        // Pick a random album by name.
+        // Pick a random track and take its album, so albums are weighted by
+        // track count (a 30-track album is 30x as likely as a single).
         let pick_sql = format!(
-            "SELECT album_artist, album FROM available_tracks {where_sql} GROUP BY album_artist, album ORDER BY RANDOM() LIMIT 1"
+            "SELECT album_artist, album FROM available_tracks {where_sql} ORDER BY RANDOM() LIMIT 1"
         );
         let mut all_params: Vec<SqlParam> = frag.params.clone();
         all_params.extend(exclude_params);
@@ -1634,6 +1636,41 @@ mod tests {
 
         let ra = store.random_album_tracks(&parse_query(""), None);
         assert!(!ra.is_empty());
+    }
+
+    #[test]
+    fn random_album_weighted_by_track_count() {
+        let store = LibraryStore::open_memory().unwrap();
+        // One 100-track album and one single: the single's album should be
+        // picked ~1/101 of the time, not 1/2 (uniform per album).
+        for i in 0..100 {
+            store
+                .upsert_track(&t(
+                    &format!("a{i}"),
+                    &format!("track {i}"),
+                    "Miles Davis",
+                    "Kind of Blue",
+                    1959,
+                ))
+                .unwrap();
+        }
+        store
+            .upsert_track(&t("s", "single", "John Coltrane", "Singles", 1960))
+            .unwrap();
+
+        let mut single_picks = 0;
+        for _ in 0..10_000 {
+            let ra = store.random_album_tracks(&parse_query(""), None);
+            if matches!(ra.first().map(|tr| tr.album.as_str()), Some("Singles")) {
+                single_picks += 1;
+            }
+        }
+        // Expected ~99; 1000 is ~90 standard deviations away. Under the old
+        // uniform-per-album behavior this would be ~5000.
+        assert!(
+            single_picks < 1000,
+            "single picked {single_picks}/10000 times"
+        );
     }
 
     #[test]
