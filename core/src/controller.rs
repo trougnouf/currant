@@ -437,9 +437,9 @@ impl PlayerController {
 
     fn repopulate_dynamic_queue(&mut self) {
         match self.dynamic_sort {
-            SortPreset::RandomAlbum | SortPreset::RandomAlbumEven => {
-                // Weighted picks a random track's album; even picks a random
-                // album by name. Both continue the current album first.
+            SortPreset::RandomAlbum | SortPreset::RandomAlbumUniform => {
+                // Weighted picks a random track's album; uniform picks a
+                // random album by name. Both continue the current album first.
                 let weighted = matches!(self.dynamic_sort, SortPreset::RandomAlbum);
                 // Continue the album the current track belongs to before jumping
                 // to a random one, so playing a track mid-album plays the rest of it.
@@ -642,12 +642,12 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_queue_refills_even_album() {
+    fn dynamic_queue_refills_uniform_album() {
         let store = make_store();
         let mut c = PlayerController::new(store);
         c.set_dynamic_source(
             SearchExpr::Str(Field::All, crate::model::CmpOp::Contains, String::new()),
-            SortPreset::RandomAlbumEven,
+            SortPreset::RandomAlbumUniform,
         );
         let first = c.determine_next_track();
         assert!(first.is_some());

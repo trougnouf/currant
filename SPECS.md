@@ -101,7 +101,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 
 ### 3.3. Sort presets
 
-`ArtistAlbumTrack` (default), `YearDesc`, `MostPlayed`, `HighestRated`, `Random`, `RandomAlbum`, `RandomAlbumEven` (radio modes), `Path` (files tab). All text sort keys use folded shadow columns for accent- and case-insensitive ordering.
+`ArtistAlbumTrack` (default), `YearDesc`, `MostPlayed`, `HighestRated`, `Random`, `RandomAlbum`, `RandomAlbumUniform` (radio modes), `Path` (files tab). All text sort keys use folded shadow columns for accent- and case-insensitive ordering.
 
 ---
 
@@ -112,7 +112,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 *   **Explicit queue** — tracks the user specifically enqueued (play next = front, enqueue = back). Takes priority.
 *   **Dynamic queue** — generated from the active search/filter. Refilled in batches of 50 when empty (random/radio modes only). In ordered mode the queue is not auto-refilled — playback stops when the explicit queue runs out. Recently played tracks are excluded. The active search is synced to the dynamic source when the user plays a track from the tracks/files tab, so Next always stays within the filtered set.
 *   **History** — capped at 200 tracks, for the "previous" button and de-duplication.
-*   **Radio** — toggled with `R`: random album → random album (even) → random → off. Default is random album. When off, playing a track from the filtered list enqueues the rest of that list in order; Next advances through it and stops at the end. When on (any random mode), the dynamic queue auto-refills from the filtered set. Random album picks a random track and plays its album in track order, so albums are weighted by track count; random album (even) picks a random album by name, so every album is equally likely. In both, the current album finishes first, and the just-played album is excluded from the next pick.
+*   **Radio** — toggled with `R`: random album (weighted) → random album (uniform) → random → off. Default is random album (weighted). When off, playing a track from the filtered list enqueues the rest of that list in order; Next advances through it and stops at the end. When on (any random mode), the dynamic queue auto-refills from the filtered set. Random album (weighted) picks a random track and plays its album in track order, so albums are weighted by track count; random album (uniform) picks a random album by name, so every album is equally likely. In both, the current album finishes first, and the just-played album is excluded from the next pick.
 
 ### 4.2. Position, seeking, and ReplayGain
 
@@ -189,7 +189,7 @@ Metadata is read and written by lofty 0.25.
 | `0`-`5` | rate track (0 clears) |
 | `c` | cycle columns (minimal / compact / full), persisted |
 | `s` | cycle sort |
-| `r` `R` | toggle radio (random album / random / off) |
+| `r` `R` | toggle radio (random album (weighted) / random album (uniform) / random / off) |
 | `p` | play / pause |
 | `n` `>` `.` | next track |
 | `N` | skip to the next album |

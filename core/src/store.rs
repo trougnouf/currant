@@ -506,7 +506,7 @@ impl LibraryStore {
     ) -> Option<u64> {
         if matches!(
             sort,
-            SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumEven
+            SortPreset::Random | SortPreset::RandomAlbum | SortPreset::RandomAlbumUniform
         ) {
             return None;
         }
@@ -1693,7 +1693,7 @@ mod tests {
     }
 
     #[test]
-    fn random_album_even_per_album() {
+    fn random_album_uniform_per_album() {
         // Every album is equally likely: the single should be picked ~1/2.
         let store = album_pick_fixture();
         let single_picks = count_single_picks(&store, false, 10_000);

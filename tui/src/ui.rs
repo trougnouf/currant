@@ -677,8 +677,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let radio = app
         .radio_sort
         .map(|s| match s {
-            currant_core::model::SortPreset::RandomAlbum => "random album",
-            currant_core::model::SortPreset::RandomAlbumEven => "random album (even)",
+            currant_core::model::SortPreset::RandomAlbum => "random album (weighted)",
+            currant_core::model::SortPreset::RandomAlbumUniform => "random album (uniform)",
             currant_core::model::SortPreset::Random => "random",
             _ => "off",
         })
@@ -769,7 +769,10 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         ("0-5", "rate track (0 clears)"),
         ("c", "cycle columns (minimal / compact / full)"),
         ("s", "cycle sort"),
-        ("r / R", "toggle radio (random album / even album / random)"),
+        (
+            "r / R",
+            "toggle radio (random album (weighted) / random album (uniform) / random)",
+        ),
         ("p", "play / pause"),
         ("n > .", "next track"),
         ("N", "skip album"),
