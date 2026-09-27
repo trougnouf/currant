@@ -1089,6 +1089,19 @@ impl App {
 
         // Search mode: capture printable input until Esc/Enter.
         if self.in_search {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('c') => return true,
+                    KeyCode::Char('u') => {
+                        self.search.clear();
+                        self.invalidate_list();
+                        self.pending_reset = true;
+                    }
+                    _ => {}
+                }
+                return false;
+            }
+
             match key.code {
                 KeyCode::Esc => self.in_search = false,
                 KeyCode::Enter => self.in_search = false,
@@ -1172,6 +1185,16 @@ impl App {
             KeyCode::Esc => {
                 if self.help {
                     self.help = false;
+                } else if self.expanded.is_some() {
+                    self.expanded = None;
+                    self.scroll_offset = 0;
+                    self.follow = true;
+                    self.status.clear();
+                } else if !self.search.is_empty() {
+                    self.search.clear();
+                    self.invalidate_list();
+                    self.pending_reset = true;
+                    self.status = "search cleared".into();
                 }
             }
             KeyCode::Tab => self.switch_tab(self.tab.next()),
