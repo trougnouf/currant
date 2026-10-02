@@ -20,14 +20,21 @@
 //!   d / dur / duration / length
 //!   * / r / rating   p / plays / play_count / playcount / count
 //!
-//! Value may carry a leading operator: `>=`, `<=`, `!=`, `>`, `<`, `=`.
+//! Value may carry a leading operator: `>=`, `<=`, `!=`, `!`, `>`, `<`, `=`.
 //! The default operator is `contains` for text fields and `eq` for numeric ones.
+//! `!` means not-contains (`t:!love`); `!=` means not-equals.
+//!
+//! A leading `-` on a free-text term negates it (`-pink`). Inside a field
+//! value a dash is literal (`t:-love` matches titles containing `-love`).
+//! A fully quoted term (`"kind of blue"`) is matched literally: it carries
+//! no field prefix, shorthand, or operator. Quotes and backslash escapes are
+//! consumed by the tokenizer anywhere inside a term.
 
 use crate::model::{CmpOp, Field, SortPreset};
 use crate::text;
 
 /// A bound parameter value produced by the SQL compiler.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SqlParam {
     Text(String),
     Int(i64),
@@ -115,8 +122,8 @@ impl SearchExpr {
 }
 
 /// Escape LIKE wildcards so user text is matched literally: `%` and `_` are
-/// wildcards by default, and `\\` is the escape character declared by the
-/// `ESCAPE '\\'` clause on every LIKE.
+/// wildcards by default, and `\` is the escape character declared by the
+/// `ESCAPE '\'` clause on every LIKE.
 fn escape_like(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -212,39 +219,27 @@ pub fn is_empty(expr: &SearchExpr) -> bool {
 /// Serialize a `SearchExpr` back into a query string. Returns `None` for the
 /// trivial match-all expression (so an empty string is stored).
 pub fn expr_to_query(expr: &SearchExpr) -> Option<String> {
-    let s = render_expr(expr);
+    let s = render_node(expr, RenderCtx::Top);
     if s.is_empty() { None } else { Some(s) }
 }
 
-fn render_expr(expr: &SearchExpr) -> String {
-    match expr {
-        SearchExpr::Str(field, op, val) => match field {
-            Field::All => {
-                if val.is_empty() {
-                    String::new()
-                } else {
-                    val.clone()
-                }
-            }
-            Field::Genre => format!("#{}", render_text_op(*op, val)),
-            Field::Rating => {
-                let n: i64 = val.parse().unwrap_or(0);
-                format!("*{}{}", render_op(*op), n)
-            }
-            Field::Duration => {
-                let n: i64 = val.parse().unwrap_or(0);
-                format!("~{}{}s", render_op(*op), n)
-            }
-            f => format!("{}:{}", field_alias(*f), render_text_op(*op, val)),
-        },
-        SearchExpr::Num(field, op, val) => match field {
-            Field::Rating => format!("*{}{}", render_op(*op), val),
-            Field::Duration => format!("~{}{}s", render_op(*op), val),
-            f => format!("{}:{}{}", field_alias(*f), render_op(*op), val),
-        },
+/// The node a rendered expression is embedded in, so the renderer can add
+/// parentheses where the grammar would otherwise bind differently.
+#[derive(Clone, Copy, PartialEq)]
+enum RenderCtx {
+    Top,
+    And,
+    Or,
+    Not,
+}
+
+fn render_node(expr: &SearchExpr, ctx: RenderCtx) -> String {
+    let s = match expr {
+        SearchExpr::Str(field, op, val) => render_str(*field, *op, val),
+        SearchExpr::Num(field, op, val) => render_num(*field, *op, *val),
         SearchExpr::And(a, b) => {
-            let l = render_expr(a);
-            let r = render_expr(b);
+            let l = render_node(a, RenderCtx::And);
+            let r = render_node(b, RenderCtx::And);
             if l.is_empty() {
                 r
             } else if r.is_empty() {
@@ -253,29 +248,89 @@ fn render_expr(expr: &SearchExpr) -> String {
                 format!("{l} {r}")
             }
         }
-        SearchExpr::Or(a, b) => format!("{} | {}", render_expr(a), render_expr(b)),
-        SearchExpr::Not(a) => format!("-{}", render_expr(a)),
+        SearchExpr::Or(a, b) => {
+            format!(
+                "{} | {}",
+                render_node(a, RenderCtx::Or),
+                render_node(b, RenderCtx::Or)
+            )
+        }
+        SearchExpr::Not(a) => format!("-{}", render_node(a, RenderCtx::Not)),
+    };
+    // OR inside AND/NOT and AND inside NOT would re-associate on re-parse.
+    let needs_parens = matches!(
+        (expr, ctx),
+        (SearchExpr::Or(..), RenderCtx::And | RenderCtx::Not)
+            | (SearchExpr::And(..), RenderCtx::Not)
+    );
+    if needs_parens { format!("({s})") } else { s }
+}
+
+fn render_str(field: Field, op: CmpOp, val: &str) -> String {
+    match field {
+        Field::All => render_value(op, val, true),
+        Field::Genre => format!("#{}", render_value(op, val, false)),
+        Field::Rating => {
+            let n: i64 = val.parse().unwrap_or(0);
+            format!("*{}{}", render_op(op), n)
+        }
+        Field::Duration => {
+            let n: i64 = val.parse().unwrap_or(0);
+            format!("~{}{}s", render_op(op), n)
+        }
+        f => format!("{}:{}", field_alias(f), render_value(op, val, false)),
     }
+}
+
+fn render_num(field: Field, op: CmpOp, val: i64) -> String {
+    match field {
+        Field::Rating => format!("*{}{}", render_op(op), val),
+        Field::Duration => format!("~{}{}s", render_op(op), val),
+        f => format!("{}:{}{}", field_alias(f), render_op(op), val),
+    }
+}
+
+/// Render a text value, quoting it when it contains characters the tokenizer
+/// would otherwise split or reinterpret. `free_text` adds the rules that only
+/// apply to un-prefixed terms (shorthand prefixes and field prefixes).
+fn render_value(op: CmpOp, val: &str, free_text: bool) -> String {
+    let body = if needs_quoting(val, free_text) {
+        format!("\"{}\"", escape_quoted(val))
+    } else {
+        val.to_string()
+    };
+    format!("{}{body}", render_op(op))
+}
+
+fn needs_quoting(val: &str, free_text: bool) -> bool {
+    val.chars()
+        .any(|c| matches!(c, ' ' | '\t' | '(' | ')' | '|' | '"' | '\\'))
+        || (free_text && (val.starts_with(['#', '*', '~', '-']) || val.contains(':')))
+}
+
+/// Escape a value rendered inside double quotes.
+fn escape_quoted(val: &str) -> String {
+    let mut out = String::with_capacity(val.len());
+    for c in val.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn render_op(op: CmpOp) -> &'static str {
     match op {
         CmpOp::Contains => "",
-        CmpOp::NotContains => "!=",
+        CmpOp::NotContains => "!",
         CmpOp::Eq => "=",
         CmpOp::NotEq => "!=",
         CmpOp::Gt => ">",
         CmpOp::Ge => ">=",
         CmpOp::Lt => "<",
         CmpOp::Le => "<=",
-    }
-}
-
-fn render_text_op(op: CmpOp, val: &str) -> String {
-    match op {
-        CmpOp::Contains => val.to_string(),
-        CmpOp::NotContains => format!("!{val}"),
-        _ => format!("{}{}", render_op(op), val),
     }
 }
 
@@ -296,7 +351,9 @@ fn field_alias(field: Field) -> &'static str {
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
-    Text(String),
+    /// A term. The second field is true when the term was fully quoted
+    /// (started with `"`), which makes it a literal free-text value.
+    Text(String, bool),
     Or,
     LParen,
     RParen,
@@ -331,14 +388,19 @@ fn tokenize(input: &str) -> Vec<Token> {
             '-' => {
                 chars.next();
                 match chars.peek() {
-                    None => tokens.push(Token::Text("-".into())),
-                    Some(&n) if is_delim(n) || n == '"' => tokens.push(Token::Text("-".into())),
-                    // A leading dash before any other token is a negation.
+                    // A dash at the end of the input or before a token
+                    // boundary is a literal term.
+                    None | Some(' ') | Some('\t') | Some(')') | Some('|') => {
+                        tokens.push(Token::Text("-".into(), false))
+                    }
+                    // Otherwise it negates the following term, including
+                    // `-(a b)` and `-"a b"`.
                     Some(_) => tokens.push(Token::NotPrefix),
                 }
             }
             _ => {
                 let mut term = String::new();
+                let mut quoted = false;
                 let mut in_quote = false;
                 let mut escaped = false;
                 while let Some(&c) = chars.peek() {
@@ -350,6 +412,11 @@ fn tokenize(input: &str) -> Vec<Token> {
                         chars.next();
                         escaped = true;
                     } else if c == '"' {
+                        // A quote opening an otherwise empty term marks it
+                        // as a fully quoted (literal) term.
+                        if term.is_empty() && !in_quote {
+                            quoted = true;
+                        }
                         in_quote = !in_quote;
                         chars.next();
                     } else if !in_quote && is_delim(c) {
@@ -360,26 +427,12 @@ fn tokenize(input: &str) -> Vec<Token> {
                     }
                 }
                 if !term.is_empty() {
-                    tokens.push(Token::Text(term));
+                    tokens.push(Token::Text(term, quoted));
                 }
             }
         }
     }
     tokens
-}
-
-/// A term counts as a "field term" if it starts with a recognised prefix or
-/// shorthand. Kept for documentation; negation now applies to any token.
-#[allow(dead_code)]
-fn is_field_term(term: &str) -> bool {
-    term == term.trim() && {
-        term.starts_with('#')
-            || term.starts_with('*')
-            || term.starts_with('~')
-            || term
-                .split_once(':')
-                .is_some_and(|(p, _)| Field::from_alias(p.trim()).is_some())
-    }
 }
 
 struct Parser {
@@ -452,17 +505,23 @@ impl Parser {
                 }
                 expr
             }
-            Some(Token::Text(t)) => {
+            Some(Token::Text(t, quoted)) => {
                 let term = t.clone();
+                let quoted = *quoted;
                 self.advance();
-                Self::parse_term(term)
+                Self::parse_term(term, quoted)
             }
             _ => SearchExpr::Str(Field::All, CmpOp::Contains, String::new()),
         }
     }
 
-    fn parse_term(term: String) -> SearchExpr {
-        // Genre shorthand: #jazz  /  #-jazz
+    fn parse_term(term: String, quoted: bool) -> SearchExpr {
+        // A fully quoted term is a literal free-text value: no field prefix,
+        // no shorthand, no operator.
+        if quoted {
+            return SearchExpr::Str(Field::All, CmpOp::Contains, term);
+        }
+        // Genre shorthand: #jazz  /  #!jazz
         if let Some(stripped) = term.strip_prefix('#') {
             let (op, val) = split_text_op(stripped);
             return SearchExpr::Str(Field::Genre, op, val.to_string());
@@ -504,8 +563,16 @@ impl Parser {
     }
 }
 
-/// Split a text value into operator + value, where a bare value means `contains`.
+/// Split a text value into operator + value, where a bare value means
+/// `contains`. `!=` (not-equals) must be checked before `!` (not-contains);
+/// a leading `!` otherwise means not-contains.
 fn split_text_op(value: &str) -> (CmpOp, &str) {
+    if let Some(rest) = value.strip_prefix("!=") {
+        return (CmpOp::NotEq, rest);
+    }
+    if let Some(rest) = value.strip_prefix('!') {
+        return (CmpOp::NotContains, rest);
+    }
     let (op, rest) = CmpOp::split_prefix(value);
     (op, rest)
 }
@@ -634,6 +701,89 @@ mod tests {
         match &e.to_sql().params[0] {
             SqlParam::Text(t) => assert_eq!(t, "%under\\_score%"),
             _ => panic!("expected text param"),
+        }
+    }
+
+    #[test]
+    fn parses_not_contains() {
+        let e = parse_query("t:!love");
+        let sql = e.to_sql();
+        assert!(sql.where_clause.contains("title_fold NOT LIKE ?"));
+
+        let e = parse_query("t:-love");
+        let sql = e.to_sql();
+        // A dash inside a field value is literal, not a negation.
+        assert!(sql.where_clause.contains("title_fold LIKE ?"));
+        match &sql.params[0] {
+            SqlParam::Text(t) => assert_eq!(t, "%-love%"),
+            _ => panic!("expected text param"),
+        }
+    }
+
+    #[test]
+    fn parses_quoted_term_as_literal() {
+        // A fully quoted term defeats the genre shorthand.
+        let e = parse_query("\"#jazz\"");
+        let sql = e.to_sql();
+        assert!(sql.where_clause.contains("title_fold LIKE ?"));
+        match &sql.params[0] {
+            SqlParam::Text(t) => assert_eq!(t, "%#jazz%"),
+            _ => panic!("expected text param"),
+        }
+
+        // And it defeats the negation prefix.
+        let e = parse_query("-\"a b\"");
+        let sql = e.to_sql();
+        assert!(sql.where_clause.contains("NOT"));
+        match &sql.params[0] {
+            SqlParam::Text(t) => assert_eq!(t, "%a b%"),
+            _ => panic!("expected text param"),
+        }
+    }
+
+    /// `expr_to_query` must be lossless: parsing a rendered expression back
+    /// must produce an equivalent SQL fragment.
+    #[test]
+    fn query_round_trip() {
+        let queries = [
+            "pink",
+            "ar:pink",
+            "ar:kind of blue",
+            "al:=kind of blue",
+            "al:!=kind of blue",
+            "t:!love",
+            "t:-love",
+            "year:>=1990",
+            "*>=4",
+            "~>5m",
+            "p:0",
+            "-pink",
+            "jazz -pink | classical",
+            "(a b) c",
+            "a | (b c)",
+            "\"quoted text\"",
+            "c:a\"b",
+            "c:100% pure",
+            "c:under_score",
+            "#jazz",
+            "#!jazz",
+            "-(a b)",
+            "-\"a b\"",
+            "a|b",
+        ];
+        for q in queries {
+            let e1 = parse_query(q);
+            let s1 = e1.to_sql();
+            let rendered = expr_to_query(&e1).unwrap_or_default();
+            let s2 = parse_query(&rendered).to_sql();
+            assert_eq!(
+                s1.where_clause, s2.where_clause,
+                "where_clause mismatch for {q:?} -> {rendered:?}"
+            );
+            assert_eq!(
+                s1.params, s2.params,
+                "params mismatch for {q:?} -> {rendered:?}"
+            );
         }
     }
 }
