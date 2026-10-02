@@ -31,6 +31,8 @@ pub struct OpusSource {
     /// decoder re-emits these priming samples, so backward seeks must
     /// discard them before counting toward the target.
     pre_skip: usize,
+    /// Reusable PCM decode buffer (max frame size, all channels).
+    pcm: Vec<i16>,
 }
 
 impl OpusSource {
@@ -95,11 +97,11 @@ impl OpusSource {
             buffer: VecDeque::new(),
             pos_samples: 0,
             pre_skip: pre_skip as usize,
+            pcm: vec![0i16; MAX_FRAME_SAMPLES * channels as usize],
         };
 
         // Pre-roll: decode and discard the encoder pre-skip
         let mut skip_remaining = pre_skip as usize;
-        let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * channels as usize];
         while skip_remaining > 0 {
             if let Some(r) = source.reader.as_mut() {
                 match r.read_packet() {
@@ -108,13 +110,13 @@ impl OpusSource {
                             continue;
                         }
                         if let Ok(per_channel) =
-                            source.decoder.decode(&packet.data, &mut pcm, false)
+                            source.decoder.decode(&packet.data, &mut source.pcm, false)
                         {
                             if per_channel > skip_remaining {
                                 let keep = per_channel - skip_remaining;
                                 let skip_total = skip_remaining * channels as usize;
                                 let total = per_channel * channels as usize;
-                                for s in pcm.iter().take(total).skip(skip_total) {
+                                for s in source.pcm.iter().take(total).skip(skip_total) {
                                     source.buffer.push_back(*s as f32 / 32768.0);
                                 }
                                 source.pos_samples += keep;
@@ -136,14 +138,13 @@ impl OpusSource {
 
     fn fill_buffer(&mut self) -> bool {
         if let Some(r) = self.reader.as_mut() {
-            let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * self.channels as usize];
             while let Ok(Some(packet)) = r.read_packet() {
                 if packet.stream_serial() != self.opus_stream {
                     continue;
                 }
-                if let Ok(per_channel) = self.decoder.decode(&packet.data, &mut pcm, false) {
+                if let Ok(per_channel) = self.decoder.decode(&packet.data, &mut self.pcm, false) {
                     let total = per_channel * self.channels as usize;
-                    for s in pcm.iter().take(total) {
+                    for s in self.pcm.iter().take(total) {
                         self.buffer.push_back(*s as f32 / 32768.0);
                     }
                     self.pos_samples += per_channel;
@@ -237,7 +238,6 @@ impl Source for OpusSource {
         // Fast-forward to the target. Decoding is so fast that we just read, decode,
         // and drop the samples until we reach the timestamp. This leverages HTTP ranges
         // safely without breaking the Opus state machine.
-        let mut pcm = vec![0i16; MAX_FRAME_SAMPLES * self.channels as usize];
         while audio < target_samples {
             if let Some(r) = self.reader.as_mut() {
                 match r.read_packet() {
@@ -245,7 +245,8 @@ impl Source for OpusSource {
                         if packet.stream_serial() != self.opus_stream {
                             continue;
                         }
-                        if let Ok(per_channel) = self.decoder.decode(&packet.data, &mut pcm, false)
+                        if let Ok(per_channel) =
+                            self.decoder.decode(&packet.data, &mut self.pcm, false)
                         {
                             // Drop any remaining pre-skip priming samples.
                             let (skip, keep) = if priming > 0 {
@@ -263,7 +264,7 @@ impl Source for OpusSource {
                                 let start_total = (skip + start) * self.channels as usize;
                                 let keep_total = (keep - start) * self.channels as usize;
                                 self.buffer.clear();
-                                for s in pcm.iter().skip(start_total).take(keep_total) {
+                                for s in self.pcm.iter().skip(start_total).take(keep_total) {
                                     self.buffer.push_back(*s as f32 / 32768.0);
                                 }
                             }
