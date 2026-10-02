@@ -72,9 +72,10 @@ impl SearchExpr {
         match self {
             SearchExpr::Str(field, op, val) => match field {
                 Field::All => {
-                    frag.where_clause
-                        .push_str("(title_fold LIKE ? OR artist_fold LIKE ? OR album_fold LIKE ? OR comment_fold LIKE ?)");
-                    let p = format!("%{}%", text::fold(val));
+                    frag.where_clause.push_str(
+                        "(title_fold LIKE ? ESCAPE '\\' OR artist_fold LIKE ? ESCAPE '\\' OR album_fold LIKE ? ESCAPE '\\' OR comment_fold LIKE ? ESCAPE '\\')",
+                    );
+                    let p = format!("%{}%", escape_like(&text::fold(val)));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
                     frag.params.push(SqlParam::Text(p.clone()));
@@ -113,16 +114,36 @@ impl SearchExpr {
     }
 }
 
+/// Escape LIKE wildcards so user text is matched literally: `%` and `_` are
+/// wildcards by default, and `\\` is the escape character declared by the
+/// `ESCAPE '\\'` clause on every LIKE.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '%' => out.push_str("\\%"),
+            '_' => out.push_str("\\_"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn write_text(frag: &mut SqlFragment, col: &str, op: CmpOp, val: &str) {
     let fv = text::fold(val);
     match op {
         CmpOp::Contains => {
-            frag.where_clause.push_str(&format!("{col} LIKE ?"));
-            frag.params.push(SqlParam::Text(format!("%{fv}%")));
+            frag.where_clause
+                .push_str(&format!("{col} LIKE ? ESCAPE '\\'"));
+            frag.params
+                .push(SqlParam::Text(format!("%{}%", escape_like(&fv))));
         }
         CmpOp::NotContains => {
-            frag.where_clause.push_str(&format!("{col} NOT LIKE ?"));
-            frag.params.push(SqlParam::Text(format!("%{fv}%")));
+            frag.where_clause
+                .push_str(&format!("{col} NOT LIKE ? ESCAPE '\\'"));
+            frag.params
+                .push(SqlParam::Text(format!("%{}%", escape_like(&fv))));
         }
         CmpOp::Eq => {
             frag.where_clause.push_str(&format!("{col} = ?"));
@@ -598,5 +619,21 @@ mod tests {
         let e = parse_query("al:=kind of blue");
         let sql = e.to_sql();
         assert!(sql.where_clause.contains("album_fold = ?"));
+    }
+
+    #[test]
+    fn escapes_like_wildcards() {
+        // `%` and `_` in user text must be matched literally.
+        let e = parse_query("c:100%");
+        match &e.to_sql().params[0] {
+            SqlParam::Text(t) => assert_eq!(t, "%100\\%%"),
+            _ => panic!("expected text param"),
+        }
+
+        let e = parse_query("c:under_score");
+        match &e.to_sql().params[0] {
+            SqlParam::Text(t) => assert_eq!(t, "%under\\_score%"),
+            _ => panic!("expected text param"),
+        }
     }
 }
