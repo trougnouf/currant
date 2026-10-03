@@ -14,19 +14,29 @@ use std::time::Duration;
 pub trait Seekable: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync + ?Sized> Seekable for T {}
 
+/// Size of the byte window fetched per `Range` request: large enough to
+/// amortise the round trip over many decoder reads, small enough to keep
+/// seek latency low.
+const WINDOW_SIZE: u64 = 1024 * 1024; // 1 MiB
+
 /// Reads a remote file over HTTP using `Range` requests. `seek` just moves an
-/// internal cursor; each `read` issues a fresh `GET` for the requested byte
-/// window. One request per chunk keeps the reader free of connection
-/// lifetimes inside the decoder, at the cost of a round trip per chunk.
+/// internal cursor; reads are served from an in-memory window, and a fresh
+/// `GET` is issued only when the cursor leaves the current window. Holding
+/// the response inside the reader keeps the decoder free of connection
+/// lifetimes while cutting round trips by a factor of the window size.
 pub struct HttpSeekableReader {
     url: String,
     auth_header: String,
     agent: ureq::Agent,
     cursor: u64,
     /// Total length from the opening `Content-Range` probe. Zero when the
-    /// peer didn't report one; range requests stay bounded by the read
-    /// buffer either way.
+    /// peer didn't report one; range requests stay bounded by the window
+    /// either way.
     total: u64,
+    /// Bytes of the current window, starting at `window_start`.
+    window: Vec<u8>,
+    /// File offset at which `window` begins.
+    window_start: u64,
 }
 
 impl HttpSeekableReader {
@@ -68,6 +78,8 @@ impl HttpSeekableReader {
                         agent,
                         cursor: 0,
                         total,
+                        window: Vec::new(),
+                        window_start: 0,
                     });
                 }
                 Err(e) => {
@@ -79,6 +91,47 @@ impl HttpSeekableReader {
     }
 }
 
+impl HttpSeekableReader {
+    /// Fetch the window covering `self.cursor` into `self.window`.
+    fn fetch_window(&mut self) -> io::Result<()> {
+        let start = self.cursor;
+        let end = if self.total > 0 {
+            (start + WINDOW_SIZE - 1).min(self.total - 1)
+        } else {
+            start + WINDOW_SIZE - 1
+        };
+        let mut response = self
+            .agent
+            .get(&self.url)
+            .header("Authorization", &self.auth_header)
+            .header("Range", &format!("bytes={start}-{end}"))
+            .call()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        // A 416 means the cursor is past the end of the file: report EOF.
+        if response.status() == 416 {
+            // Mark a conservative EOF so later reads don't re-probe.
+            if self.total == 0 {
+                self.total = start.max(1);
+            }
+            self.window.clear();
+            self.window_start = start;
+            return Ok(());
+        }
+        // A 200 means the server ignored the range: only valid from byte 0.
+        if response.status() == 200 && start > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "server ignored the Range request",
+            ));
+        }
+        let mut reader = response.body_mut().as_reader();
+        self.window.clear();
+        reader.read_to_end(&mut self.window)?;
+        self.window_start = start;
+        Ok(())
+    }
+}
+
 impl Read for HttpSeekableReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -87,40 +140,19 @@ impl Read for HttpSeekableReader {
         if self.total > 0 && self.cursor >= self.total {
             return Ok(0); // EOF
         }
-        let end = if self.total > 0 {
-            (self.cursor + buf.len() as u64 - 1).min(self.total - 1)
-        } else {
-            self.cursor + buf.len() as u64 - 1
-        };
-        let mut response = self
-            .agent
-            .get(&self.url)
-            .header("Authorization", &self.auth_header)
-            .header("Range", &format!("bytes={}-{}", self.cursor, end))
-            .call()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        // A 416 means the cursor is past the end of the file: report EOF.
-        if response.status() == 416 {
-            return Ok(0);
+        let in_window = self.window_start <= self.cursor
+            && self.cursor < self.window_start + self.window.len() as u64;
+        if !in_window {
+            self.fetch_window()?;
         }
-        // A 200 means the server ignored the range: only valid from byte 0.
-        if response.status() == 200 && self.cursor > 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "server ignored the Range request",
-            ));
+        if self.window.is_empty() {
+            return Ok(0); // EOF
         }
-        let mut reader = response.body_mut().as_reader();
-        let mut filled = 0;
-        while filled < buf.len() {
-            let n = reader.read(&mut buf[filled..])?;
-            if n == 0 {
-                break;
-            }
-            filled += n;
-        }
-        self.cursor += filled as u64;
-        Ok(filled)
+        let offset = (self.cursor - self.window_start) as usize;
+        let n = buf.len().min(self.window.len() - offset);
+        buf[..n].copy_from_slice(&self.window[offset..offset + n]);
+        self.cursor += n as u64;
+        Ok(n)
     }
 }
 
