@@ -72,7 +72,7 @@ On open, the store compares the stored `schema_version` against the current one.
 
 ## 3. Query language
 
-Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
+Evaluated instantly during search input. Compiles to SQL `WHERE` clauses over the folded shadow columns, so all text matching is case- and accent-insensitive.
 
 ### 3.1. Syntax
 
@@ -85,21 +85,35 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 | `g:text` / `genre:text` | genre contains text |
 | `c:text` / `comment:text` | comment contains text |
 | `#jazz` | genre contains "jazz" (shorthand) |
-| `year:>=1990` | year >= 1990 (also `>`, `<`, `<=`, `=`, `!=`) |
-| `*>=4` | rating >= 4 (also `*3`, `*<=2`, etc.) |
+| `year:>=1990` | year >= 1990 (also `>`, `<`, `<=`, `=`, `!=`; `y:` alias) |
+| `d:>=5m` / `length:>5400s` | duration in seconds (`d` / `dur` / `duration` / `length`; `1h30m` = 5400s) |
+| `*>=4` | rating >= 4 (also `*3`, `*<=2`, `r:4`, `rating:>=4`) |
 | `~>5m` | duration > 5 minutes (also `~180s`, `~1h30m`) |
-| `p:0` | play count = 0 (also `p:>=10`, etc.) |
-| `-term` | NOT (exclude) |
+| `p:0` | play count = 0 (also `p:>=10`, `plays:0`, `play_count:0`, `playcount:0`, `count:0`) |
+| `-term` | NOT (exclude); also negates groups and quoted terms: `-(a b)`, `-"a b"` |
 | `a \| b` | OR |
 | `a b` | implicit AND |
 | `(a b)` | grouping |
-| `"quoted text"` | quoted (spaces preserved) |
+| `"quoted text"` | literal term: no field prefix, shorthand, or operator; spaces preserved |
 
 ### 3.2. Operators
 
-`contains` (default for text), `=` (exact, case-insensitive), `!=` (not equal), `>`, `>=`, `<`, `<=` (numeric fields).
+| Prefix | Text fields | Numeric fields |
+|---|---|---|
+| *(none)* | contains | = |
+| `=` | exact match | = |
+| `!=` | not equal | != |
+| `!` | not contains | not supported |
+| `>`, `>=`, `<`, `<=` | not supported | as written |
 
-### 3.3. Sort presets
+`!=` is recognized before `!`, so `t:!love` is not-contains while `t:!=love` is not-equals. A leading `-` negates the whole following term; a dash inside a field value is literal (`t:-love` matches titles containing `-love`), as is a trailing dash (it searches for `-` itself).
+
+### 3.3. Escaping
+
+* LIKE wildcards in user text are escaped, so `%` and `_` match literally (`c:100%` only matches comments containing `100%`).
+* `\"` and `\\` escape a quote or backslash anywhere inside a term; a term that starts with `"` is fully quoted and matched literally (defeating prefixes, shorthands, and operators).
+
+### 3.4. Sort presets
 
 `ArtistAlbumTrack` (default), `YearDesc`, `MostPlayed`, `HighestRated`, `Random`, `RandomAlbum`, `RandomAlbumUniform` (radio modes), `Path` (files tab). All text sort keys use folded shadow columns for accent- and case-insensitive ordering.
 
@@ -117,7 +131,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses.
 ### 4.2. Position, seeking, and ReplayGain
 
 *   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics) owned by the `PlayerController` in core. The UI reads it each frame; the control protocol reports it in `ControlResponse`.
-*   Seeking is requested through the same `PlaybackState`: `SeekTo` is resolved by the controller, which stores the target in milliseconds, and the audio thread calls `Player::try_seek` on the next loop iteration.
+*   Seeking is requested through the same `PlaybackState`: `SeekTo` is resolved by the controller, which stores the target in milliseconds, and the audio thread applies it with `Player::try_seek`. rodio defers the seek until the source is polled next, which does not happen while the stream is corked; a seek that arrives while paused or before a track is loaded is remembered and applied on resume or once the new track starts. The UI reports the seek target as the position immediately.
 *   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
 *   The now-playing bar shows `position / duration` and a progress bar (Gauge widget).
 *   ReplayGain is supported and applied at playback time. When enabled, it calculates a volume multiplier using `REPLAYGAIN_TRACK_GAIN` metadata tags extracted by lofty right before playback.
@@ -142,7 +156,7 @@ All frontends fire `PlayerIntent` into the controller:
 ### 4.4. Scrobbling
 
 *   `Scrobbler` trait: `report(track, event)`.
-*   Events: `NowPlaying` (on track start), `Submitted` (on track completion past threshold: half duration or 4 min, whichever is shorter).
+*   Events: `NowPlaying` (on track start), `Submitted` (when the playback position reaches the threshold: half the track's duration capped at 4 minutes; tracks shorter than 30 seconds are never scrobbled, and an unknown duration falls back to 30 seconds of listening). The threshold is checked against the actual playback position, not wall clock, so pausing and seeking do not count toward it.
 *   Listenbrainz is implemented (ureq HTTP).
 *   Scrobbling never blocks playback; errors are ignored. Each report runs on a short-lived thread with a bounded HTTP timeout, so a slow or unreachable server cannot stall the audio thread.
 *   The Listenbrainz token is persisted in the `kv` store (`scrobble_token`). The TUI wires a `ListenbrainzScrobbler` on startup when the token is non-empty, and re-wires it live when the token is changed in the settings pane. An empty token disables scrobbling.
