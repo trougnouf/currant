@@ -18,15 +18,17 @@ use std::num::NonZero;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Minimum fraction/length of a track before a completion scrobble is sent.
-fn scrobble_threshold(duration_secs: u32) -> Duration {
-    if duration_secs == 0 {
-        Duration::from_secs(30)
-    } else {
-        Duration::from_secs((duration_secs as u64 / 2).min(240))
+/// How far into a track the user must have listened before a completion
+/// scrobble is sent: half its duration, capped at 4 minutes. Tracks shorter
+/// than 30 seconds are never scrobbled; an unknown duration falls back to
+/// 30 seconds of listening.
+fn scrobble_threshold(duration_secs: u32) -> Option<Duration> {
+    if duration_secs < 30 {
+        return (duration_secs == 0).then(|| Duration::from_secs(30));
     }
+    Some(Duration::from_secs((duration_secs as u64 / 2).min(240)))
 }
 
 /// The ReplayGain multiplier for a track, read from its
@@ -212,8 +214,11 @@ pub fn spawn(
         let player = Player::connect_new(&mixer_ctrl);
 
         let mut playing_id: Option<String> = None;
-        let mut started_at = Instant::now();
-        let mut threshold = Duration::from_secs(30);
+        let mut threshold: Option<Duration> = Some(Duration::from_secs(30));
+        // A seek that arrived before it could be applied (no track loaded
+        // yet, or the stream corked); applied to the track in the player,
+        // or remembered for the next one that loads.
+        let mut pending_seek: Option<u64> = None;
         let mut rg_key: (Option<String>, bool) = (None, false);
         let mut current_rg_multiplier = 1.0_f32;
         let mut stream_paused = false;
@@ -247,22 +252,23 @@ pub fn spawn(
 
             player.set_volume(volume * current_rg_multiplier);
 
-            // Publish the current playback position for the UI.
-            state.set_position(player.get_pos().as_millis() as u64);
-
-            // Process pending seek requests.
-            if let Some(target_ms) = state.take_seek()
-                && playing_id.is_some()
-            {
-                let _ = player.try_seek(Duration::from_millis(target_ms));
-                state.set_position(target_ms);
-            }
+            // Publish the current playback position for the UI. A pending
+            // seek is shown as the position immediately, so the UI doesn't
+            // wait for the (deferred) rodio seek to land.
+            let pos = player.get_pos().as_millis() as u64;
+            state.set_position(pending_seek.unwrap_or(pos));
 
             if !is_playing {
                 player.pause();
                 if !stream_paused {
                     let _ = stream.pause();
                     stream_paused = true;
+                }
+                // The stream is corked while paused, and rodio's try_seek
+                // blocks until the source is polled again — remember the
+                // seek and apply it on resume instead of stalling here.
+                if let Some(ms) = state.take_seek() {
+                    pending_seek = Some(ms);
                 }
                 thread::sleep(Duration::from_millis(100));
                 continue;
@@ -273,6 +279,17 @@ pub fn spawn(
             }
             player.play();
 
+            // The stream is uncorked here, so rodio's deferred seek can run.
+            if let Some(ms) = state.take_seek() {
+                pending_seek = Some(ms);
+            }
+            if playing_id.is_some()
+                && !player.empty()
+                && let Some(ms) = pending_seek.take()
+            {
+                let _ = player.try_seek(Duration::from_millis(ms));
+            }
+
             // When no track is current but we should be playing, pull the
             // next track from the queue (explicit or dynamic).
             let current = if current.is_none() {
@@ -281,10 +298,19 @@ pub fn spawn(
                 current
             };
 
+            // Nothing to play: drop any stale seek so it doesn't apply to
+            // the next explicitly chosen track.
+            if current.is_none() && playing_id.is_none() {
+                pending_seek = None;
+            }
+
             // A new track was chosen (play/skip/previous).
             if current != playing_id {
                 if let Some(prev) = playing_id.take() {
-                    if started_at.elapsed() >= threshold {
+                    // Scrobble on the actual listened position, not wall
+                    // clock: pausing and seeking must not count toward the
+                    // threshold.
+                    if threshold.is_some_and(|t| player.get_pos() >= t) {
                         controller.lock().unwrap().on_track_completed(&prev);
                     }
                     player.skip_one();
@@ -304,7 +330,6 @@ pub fn spawn(
                             player.append(src);
                             player.play();
                             playing_id = Some(id.clone());
-                            started_at = Instant::now();
                             controller.lock().unwrap().on_track_started(id);
                         }
                         None => {
@@ -319,7 +344,7 @@ pub fn spawn(
             // Same track: detect natural end.
             if playing_id.is_some() && player.empty() {
                 let prev = playing_id.take().unwrap();
-                if started_at.elapsed() >= threshold {
+                if threshold.is_some_and(|t| player.get_pos() >= t) {
                     controller.lock().unwrap().on_track_completed(&prev);
                 }
                 controller.lock().unwrap().dispatch(PlayerIntent::NextTrack);
@@ -330,4 +355,22 @@ pub fn spawn(
             thread::sleep(Duration::from_millis(80));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrobble_threshold_scales_with_duration() {
+        // Unknown duration: fall back to 30 seconds of listening.
+        assert_eq!(scrobble_threshold(0), Some(Duration::from_secs(30)));
+        // Too short to count at all.
+        assert_eq!(scrobble_threshold(29), None);
+        // Half the duration, capped at 4 minutes.
+        assert_eq!(scrobble_threshold(30), Some(Duration::from_secs(15)));
+        assert_eq!(scrobble_threshold(120), Some(Duration::from_secs(60)));
+        assert_eq!(scrobble_threshold(600), Some(Duration::from_secs(240)));
+        assert_eq!(scrobble_threshold(3600), Some(Duration::from_secs(240)));
+    }
 }
