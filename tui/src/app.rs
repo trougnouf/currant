@@ -773,7 +773,10 @@ impl App {
             self.active_zone = None;
             self.status = "zone: local (no peers found)".into();
             if let Some(tx) = &self.zone_tx {
-                let _ = tx.send(crate::zone::ZoneCommand::Switch(None));
+                let _ = tx.send(crate::zone::ZoneCommand::Switch {
+                    target: None,
+                    follow_up: None,
+                });
             }
             return;
         }
@@ -795,7 +798,10 @@ impl App {
         self.active_zone = next_zone.clone();
         if let Some(tx) = &self.zone_tx {
             let peer_info = next_zone.as_ref().map(|p| (p.ips.clone(), p.ws_port));
-            let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
+            let _ = tx.send(crate::zone::ZoneCommand::Switch {
+                target: peer_info,
+                follow_up: None,
+            });
         }
 
         if let Some(z) = &self.active_zone {
@@ -859,27 +865,24 @@ impl App {
             self.dispatch_intent(PlayerIntent::TogglePlayPause, c);
         }
 
-        // 3. Switch zone
-        self.active_zone = next_zone.clone();
-        if let Some(tx) = &self.zone_tx {
-            let peer_info = next_zone.as_ref().map(|p| (p.ips.clone(), p.ws_port));
-            let _ = tx.send(crate::zone::ZoneCommand::Switch(peer_info));
-        }
-
-        // 4. Restore state on new zone
+        // 3. Switch zone and restore state on it. The snapshot rides the
+        // switch: the zone client sends it once the connection to the new
+        // target (re)establishes, so a slow or flaky connect can't lose it.
         let intent = PlayerIntent::RestoreSnapshot {
             queue: snap,
             position_ms: pos,
             is_playing: was_playing,
         };
-        if self.active_zone.is_some() {
-            if let Some(tx) = &self.zone_tx {
-                // Sent to the newly activated WebSocket
-                let _ = tx.send(crate::zone::ZoneCommand::Intent(intent));
-            }
-        } else {
+        self.active_zone = next_zone.clone();
+        if self.active_zone.is_none() {
             // Wrapped around to local
             c.dispatch(intent);
+        } else if let Some(tx) = &self.zone_tx {
+            let peer_info = next_zone.as_ref().map(|p| (p.ips.clone(), p.ws_port));
+            let _ = tx.send(crate::zone::ZoneCommand::Switch {
+                target: peer_info,
+                follow_up: Some(intent),
+            });
         }
 
         if let Some(z) = &self.active_zone {

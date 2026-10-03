@@ -238,8 +238,6 @@ impl LibraryStore {
         }
     }
 
-    /// Insert or replace a track, preserving user-managed mutable columns
-    /// (rating, play_count, last_played) when the file has not changed.
     /// Insert or replace multiple tracks in a single transaction. Drastically
     /// improves performance during full scans.
     pub fn upsert_batch(&self, tracks: &[Track]) -> rusqlite::Result<()> {
@@ -300,16 +298,11 @@ impl LibraryStore {
                     now,
                 ])?;
 
-                let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
-                    1
-                } else {
-                    0
-                };
                 stmt_source.execute(rusqlite::params![
                     track.id,
                     instance_id,
                     track.path,
-                    format_tier,
+                    format_tier(&track.path),
                     track.file_mtime,
                 ])?;
             }
@@ -370,20 +363,9 @@ impl LibraryStore {
         )?;
 
         let instance_id = self.instance_id.clone();
-        let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
-            1
-        } else {
-            0
-        };
         conn.execute(
             "INSERT OR REPLACE INTO track_sources (logical_id, instance_id, path, format_tier, file_mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![
-                track.id,
-                instance_id,
-                track.path,
-                format_tier,
-                track.file_mtime,
-            ],
+            rusqlite::params![track.id, instance_id, track.path, format_tier(&track.path), track.file_mtime],
         )?;
 
         Ok(())
@@ -1043,6 +1025,18 @@ impl LibraryStore {
         self.kv_get("scrobble_token").unwrap_or_default()
     }
 
+    /// Whether remote streaming prefers lossy sources over lossless (bandwidth
+    /// over fidelity). Default: true.
+    pub fn load_prefer_remote_lossy(&self) -> bool {
+        self.kv_get("prefer_remote_lossy")
+            .map(|v| v != "false")
+            .unwrap_or(true)
+    }
+
+    pub fn save_prefer_remote_lossy(&self, prefer: bool) {
+        self.kv_set("prefer_remote_lossy", if prefer { "true" } else { "false" });
+    }
+
     pub fn save_pairing_token(&self, token: &str) {
         self.kv_set("pairing_token", token);
     }
@@ -1177,10 +1171,14 @@ impl LibraryStore {
     /// Merge a peer's delta payload into the local catalog. Remote metadata
     /// wins when newer; local play data is preserved unless the peer played
     /// the track more recently (highest `last_played` wins). Remote files are
-    /// mapped into `track_sources` under the peer's `instance_id`.
+    /// mapped into `track_sources` under the peer's `instance_id`. When a
+    /// local copy exists, the `tracks` `path`/`file_mtime` columns keep
+    /// pointing at the local file — tag writes, ReplayGain reads, and the
+    /// scanner's mtime check all rely on them.
     pub fn apply_sync_payload(&self, peer_id: &str, payload: &SyncPayload) {
         let mut conn = self.write_conn();
         let tx = conn.transaction().unwrap();
+        let instance_id = self.instance_id.clone();
 
         for track in &payload.tracks {
             let current_updated: i64 = tx
@@ -1198,11 +1196,25 @@ impl LibraryStore {
                 let album_fold = text::fold(&track.album);
                 let genre_fold = text::fold(&track.genre);
                 let comment_fold = text::fold(&track.comment);
+                // If a local copy exists, keep the local path/mtime in
+                // `tracks`; the peer's physical path only matters in
+                // `track_sources`.
+                let local_source = tx
+                    .query_row(
+                        "SELECT path, file_mtime FROM track_sources WHERE logical_id = ?1 AND instance_id = ?2",
+                        rusqlite::params![track.id, instance_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .ok();
+                let (path, file_mtime) = match local_source {
+                    Some((p, m)) => (p, m),
+                    None => (track.path.clone(), track.file_mtime),
+                };
                 let _ = tx.execute(
                     UPSERT_TRACK_SQL,
                     rusqlite::params![
                         track.id,
-                        track.path,
+                        path,
                         track.title,
                         track.artist,
                         track.album_artist,
@@ -1221,7 +1233,7 @@ impl LibraryStore {
                         track.rating,
                         track.play_count,
                         track.last_played,
-                        track.file_mtime,
+                        file_mtime,
                         track.updated_at
                     ],
                 );
@@ -1243,14 +1255,9 @@ impl LibraryStore {
                 }
             }
 
-            let format_tier = if track.path.ends_with(".flac") || track.path.ends_with(".wav") {
-                1
-            } else {
-                0
-            };
             let _ = tx.execute(
                 "INSERT OR REPLACE INTO track_sources (logical_id, instance_id, path, format_tier, file_mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![track.id, peer_id, track.path, format_tier, track.file_mtime],
+                rusqlite::params![track.id, peer_id, track.path, format_tier(&track.path), track.file_mtime],
             );
         }
 
@@ -1269,20 +1276,37 @@ impl LibraryStore {
         tx.commit().unwrap();
     }
 
-    /// Resolves the first connected peer that holds a source for this track,
-    /// used to pick where to stream it from. `None` when no connected
-    /// instance has a copy.
-    pub fn get_remote_source_peer(&self, logical_id: &str) -> Option<String> {
+    /// Connected peers holding a physical source for this track, best first:
+    /// the preferred format tier (lossy by default — see
+    /// `load_prefer_remote_lossy`) before the other, then instance id for
+    /// determinism. Each entry is `(instance_id, path)`. Empty when no
+    /// connected instance has a copy.
+    pub fn get_remote_source_peers(&self, logical_id: &str) -> Vec<(String, String)> {
+        // Resolve the preference before taking the read guard: `kv_get`
+        // locks the same connection, and the mutex is not reentrant.
+        let order = if self.load_prefer_remote_lossy() {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let conn = self.read_conn();
-        conn.query_row(
-            "SELECT instance_id FROM track_sources
+        let sql = format!(
+            "SELECT instance_id, path FROM track_sources
              WHERE logical_id = ?1
                AND instance_id IN (SELECT instance_id FROM connected_peers)
-             LIMIT 1",
-            rusqlite::params![logical_id],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
+             ORDER BY format_tier {order}, instance_id"
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query(rusqlite::params![logical_id]) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        rows.mapped(|row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .flatten()
+            .collect()
     }
 
     /// The local physical path for a logical id, used by the `/stream`
@@ -1347,6 +1371,17 @@ fn select_tracks(
         out.push(t);
     }
     out
+}
+
+/// Lossless (1) or lossy (0) format tier, used to order remote source
+/// candidates. Case-insensitive: a `.FLAC` on disk is still lossless.
+fn format_tier(path: &str) -> i64 {
+    let p = path.to_ascii_lowercase();
+    if p.ends_with(".flac") || p.ends_with(".wav") {
+        1
+    } else {
+        0
+    }
 }
 
 fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
@@ -1851,7 +1886,12 @@ mod tests {
         assert_eq!(got.title, "So What (Take 2)");
         assert_eq!(got.last_played, Some(base + 500));
         assert!(got.is_local); // the local copy still exists
-        assert_eq!(store.get_remote_source_peer("1").as_deref(), Some("peer-1"));
+        // The local path/mtime survive the newer remote revision.
+        assert_eq!(got.path, "/1");
+        assert_eq!(
+            store.get_remote_source_peers("1"),
+            vec![("peer-1".to_string(), "/peer/so_what.flac".to_string())]
+        );
 
         // Peer reports an older revision with fresher play data: metadata is
         // kept, play data is adopted (highest last_played wins).
@@ -1889,7 +1929,10 @@ mod tests {
             },
         );
         store.add_connected_peer("peer-1");
-        assert_eq!(store.get_remote_source_peer("1").as_deref(), Some("peer-1"));
+        assert_eq!(
+            store.get_remote_source_peers("1"),
+            vec![("peer-1".to_string(), "/peer/so_what.flac".to_string())]
+        );
 
         // Peer deletes the file: the tombstone drops only the peer's source.
         store.apply_sync_payload(
@@ -1899,7 +1942,7 @@ mod tests {
                 tombstones: vec!["1".into()],
             },
         );
-        assert_eq!(store.get_remote_source_peer("1"), None);
+        assert!(store.get_remote_source_peers("1").is_empty());
 
         // The local copy is untouched: track and local source survive.
         let got = store.get_track("1").unwrap();
@@ -1990,15 +2033,122 @@ mod tests {
         // Peer disconnected: the remote track is not available.
         assert_eq!(store.track_count(), 1);
         assert!(store.get_track("2").is_none());
-        assert_eq!(store.get_remote_source_peer("2"), None);
+        assert!(store.get_remote_source_peers("2").is_empty());
 
         // Peer connects: the remote track becomes available.
         store.add_connected_peer("peer-1");
         assert_eq!(store.track_count(), 2);
-        assert_eq!(store.get_remote_source_peer("2").as_deref(), Some("peer-1"));
+        assert_eq!(
+            store.get_remote_source_peers("2"),
+            vec![("peer-1".to_string(), "/2".to_string())]
+        );
 
         // Peer disconnects: hidden again.
         store.remove_connected_peer("peer-1");
         assert_eq!(store.track_count(), 1);
+    }
+
+    #[test]
+    fn remote_source_peers_ordered_by_format_tier() {
+        let store = LibraryStore::open_memory().unwrap();
+        store
+            .upsert_track(&t("1", "So What", "Miles Davis", "Kind of Blue", 1959))
+            .unwrap();
+
+        let mut lossy = t("1", "So What", "Miles Davis", "Kind of Blue", 1959);
+        lossy.path = "/peer-1/so_what.mp3".into();
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![lossy],
+                tombstones: vec![],
+            },
+        );
+        let mut lossless = t("1", "So What", "Miles Davis", "Kind of Blue", 1959);
+        lossless.path = "/peer-2/so_what.flac".into();
+        store.apply_sync_payload(
+            "peer-2",
+            &SyncPayload {
+                tracks: vec![lossless],
+                tombstones: vec![],
+            },
+        );
+        store.add_connected_peer("peer-1");
+        store.add_connected_peer("peer-2");
+
+        // Default: lossy first (bandwidth over fidelity).
+        assert_eq!(
+            store.get_remote_source_peers("1"),
+            vec![
+                ("peer-1".to_string(), "/peer-1/so_what.mp3".to_string()),
+                ("peer-2".to_string(), "/peer-2/so_what.flac".to_string())
+            ]
+        );
+
+        store.save_prefer_remote_lossy(false);
+        assert_eq!(
+            store.get_remote_source_peers("1"),
+            vec![
+                ("peer-2".to_string(), "/peer-2/so_what.flac".to_string()),
+                ("peer-1".to_string(), "/peer-1/so_what.mp3".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn sync_preserves_local_path_and_mtime() {
+        let store = LibraryStore::open_memory().unwrap();
+        let mut local = t("1", "So What", "Miles Davis", "Kind of Blue", 1959);
+        local.file_mtime = 123;
+        store.upsert_track(&local).unwrap();
+        let base = store.get_track("1").unwrap().updated_at;
+
+        // A peer with a newer revision and a different physical file.
+        let mut peer = t("1", "So What (Take 2)", "Miles Davis", "Kind of Blue", 1959);
+        peer.path = "/peer/so_what.flac".into();
+        peer.file_mtime = 999;
+        peer.updated_at = base + 1000;
+        store.apply_sync_payload(
+            "peer-1",
+            &SyncPayload {
+                tracks: vec![peer],
+                tombstones: vec![],
+            },
+        );
+
+        // Metadata adopted, but the local path/mtime are untouched so the
+        // local copy stays playable and rescannable.
+        let got = store.get_track("1").unwrap();
+        assert_eq!(got.title, "So What (Take 2)");
+        assert_eq!(got.path, "/1");
+        assert_eq!(got.file_mtime, 123);
+        assert_eq!(store.get_local_source_path("1"), Some("/1".to_string()));
+
+        // The peer's source is only resolvable while it is connected.
+        assert!(store.get_remote_source_peers("1").is_empty());
+        store.add_connected_peer("peer-1");
+        assert_eq!(
+            store.get_remote_source_peers("1"),
+            vec![("peer-1".to_string(), "/peer/so_what.flac".to_string())]
+        );
+    }
+
+    #[test]
+    fn format_tier_is_case_insensitive() {
+        assert_eq!(format_tier("/a/Song.FLAC"), 1);
+        assert_eq!(format_tier("/a/song.WAV"), 1);
+        assert_eq!(format_tier("/a/song.flac"), 1);
+        assert_eq!(format_tier("/a/song.mp3"), 0);
+        assert_eq!(format_tier("/a/song"), 0);
+    }
+
+    #[test]
+    fn prefer_remote_lossy_round_trip() {
+        let store = LibraryStore::open_memory().unwrap();
+        assert!(store.load_prefer_remote_lossy()); // default
+        store.save_prefer_remote_lossy(false);
+        assert!(!store.load_prefer_remote_lossy());
+        store.save_prefer_remote_lossy(true);
+        assert!(store.load_prefer_remote_lossy());
     }
 }

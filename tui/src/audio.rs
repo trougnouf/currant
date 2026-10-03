@@ -59,59 +59,78 @@ fn track_gain_multiplier(path: &Path) -> f32 {
     10.0_f32.powf(db / 20.0).clamp(0.1, 10.0)
 }
 
-/// Open a track as a rodio `Source`. Local files are opened directly; remote
-/// tracks are streamed from the peer that owns them through a seekable HTTP
-/// reader. Tries symphonia first, then the opus decoder when the `opus`
-/// feature is enabled.
+/// A lazily-created seekable reader for one playback source.
+type ReaderFactory = Box<dyn Fn() -> Option<Box<dyn Seekable>> + Send>;
+
+/// Open a track as a rodio `Source`. Sources are tried best first: the local
+/// file when we hold one, then connected peers holding a copy in
+/// format-tier order (see `LibraryStore::get_remote_source_peers`). Each
+/// source is tried with symphonia and, for Opus/OGG files, the bundled opus
+/// decoder, before moving on to the next source.
 fn open_source(
     track: &Track,
     store: &LibraryStore,
     network: &Arc<Mutex<NetworkState>>,
 ) -> Option<Box<dyn Source<Item = f32> + Send>> {
-    // A fresh seekable reader per attempt: each decoder consumes its reader,
-    // so a failed first attempt must not leave the second one starting
-    // mid-file.
-    let make_reader = || -> Option<Box<dyn Seekable>> {
-        if track.is_local {
-            File::open(&track.path)
-                .ok()
-                .map(|f| Box::new(f) as Box<dyn Seekable>)
-        } else {
-            let peer_id = store.get_remote_source_peer(&track.id)?;
-            let peer = {
-                let state = network.lock().unwrap();
-                state.peers.get(&peer_id)?.clone()
-            };
-            Some(Box::new(
-                HttpSeekableReader::new(
-                    &peer.ips,
-                    peer.http_port,
-                    &track.id,
-                    store.load_pairing_token(),
-                )
-                .ok()?,
-            ))
-        }
-    };
+    let mut candidates: Vec<(String, ReaderFactory)> = Vec::new();
 
-    if let Some(reader) = make_reader()
-        && let Ok(decoder) = Decoder::new(reader)
-    {
-        return Some(Box::new(decoder));
+    if track.is_local {
+        let path = track.path.clone();
+        candidates.push((
+            path.clone(),
+            Box::new(move || {
+                File::open(&path)
+                    .ok()
+                    .map(|f| Box::new(f) as Box<dyn Seekable>)
+            }),
+        ));
     }
-    #[cfg(feature = "opus")]
-    {
-        let is_opus = Path::new(&track.path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("opus") || e.eq_ignore_ascii_case("ogg"));
-        if is_opus
-            && let Some(reader) = make_reader()
-            && let Ok(src) = crate::opus::OpusSource::open(reader)
+
+    let token = store.load_pairing_token();
+    for (peer_id, peer_path) in store.get_remote_source_peers(&track.id) {
+        let peer = {
+            let state = network.lock().unwrap();
+            state.peers.get(&peer_id).cloned()
+        };
+        let Some(peer) = peer else { continue };
+        let ips = peer.ips;
+        let http_port = peer.http_port;
+        let track_id = track.id.clone();
+        let token = token.clone();
+        candidates.push((
+            peer_path,
+            Box::new(move || {
+                Some(Box::new(
+                    HttpSeekableReader::new(&ips, http_port, &track_id, token.clone()).ok()?,
+                ))
+            }),
+        ));
+    }
+
+    for (path, make_reader) in &candidates {
+        // A fresh seekable reader per attempt: each decoder consumes its
+        // reader, so a failed attempt must not leave the next one starting
+        // mid-file.
+        if let Some(reader) = make_reader()
+            && let Ok(decoder) = Decoder::new(reader)
         {
-            return Some(Box::new(src));
+            return Some(Box::new(decoder));
+        }
+        #[cfg(feature = "opus")]
+        {
+            let is_opus = Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("opus") || e.eq_ignore_ascii_case("ogg"));
+            if is_opus
+                && let Some(reader) = make_reader()
+                && let Ok(src) = crate::opus::OpusSource::open(reader)
+            {
+                return Some(Box::new(src));
+            }
         }
     }
+
     eprintln!("failed to open track {}: {}", track.id, track.path);
     None
 }

@@ -284,7 +284,7 @@ Currant instances operate as peers in a decentralized mesh. An instance dynamica
 
 ### 8.1. Unified Topology & Discovery
 *   **Identity:** On first launch, each instance generates a UUID `instance_id` stored in the `kv` table and cached in memory for the life of the process.
-*   **Discovery (mDNS):** Instances automatically discover each other on the local network via Zeroconf/mDNS.
+*   **Discovery (mDNS):** Instances automatically discover each other on the local network via Zeroconf/mDNS. If the mDNS daemon thread dies, the discovery loop rebuilds it and re-registers the local service.
 *   **Protocol:** Every instance runs a lightweight HTTP server.
     *   `/ws` - WebSocket endpoint for JSON command/state sync (`PlayerIntent` and `ControlResponse`).
     *   `/stream/:logical_id` - HTTP endpoint for media streaming (supports `Range` requests).
@@ -299,7 +299,7 @@ To avoid transferring files that already exist locally (regardless of folder str
 *   **Logical IDs:** The core `tracks` table represents *Logical Tracks*. Its `id` is the FNV-1a hash of the folded metadata (`album_artist + album + track_number + title`).
 *   **Physical Sources:** A new `track_sources` table maps `logical_id -> (instance_id, full_path, format_tier)`. `format_tier` distinguishes Lossless (FLAC/WAV) from Lossy (Opus/OGG/MP3).
 *   **Source Resolution Priority:** When a Playback Target requests a track, it picks the optimal physical source based on a new setting `prefer_remote_lossy` (default: `true`):
-    1.  **Local Source Available:** Always play local. Zero network transfer. (Lossless > Lossy).
+    1.  **Local Source Available:** Always play local first. Zero network transfer. (Lossless > Lossy). If the local file fails to open or decode (e.g. it was deleted and the catalog has not been rescanned), fall through to the best remote source.
     2.  **Only Remote Sources Available:**
         *   If `prefer_remote_lossy` is `true`: Remote Lossy > Remote Lossless (minimizes bandwidth).
         *   If `prefer_remote_lossy` is `false`: Remote Lossless > Remote Lossy.
@@ -310,6 +310,7 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   **Timestamps:** The `tracks` table tracks modifications via `updated_at`.
 *   **Tombstones:** A new `tombstones` table tracks `(logical_id, deleted_at)` when tracks are removed.
 *   **Delta Sync Payload:** When Node A connects to Node B, it requests `GET /sync?since=<last_sync_timestamp>`. Node B returns a compact JSON payload containing *only* the tracks modified/added, and the IDs deleted, since that exact timestamp. Only available tracks (see 8.2) are served, so a peer never receives metadata for tracks it cannot stream.
+*   **Pull Retry:** The sync pull runs in the background and retries with exponential backoff (2 s to 60 s) until it succeeds or the peer leaves the mesh, so a peer that is briefly unreachable (boot, Wi-Fi roam) still syncs its catalog.
 *   **Tombstone Apply:** When a peer's tombstones are applied, the peer's `track_sources` rows for those logical ids are deleted and logical tracks left with no sources are removed from `tracks`, so ghost metadata is cleared once the last peer syncs the removal.
 *   **Stale Peer Eviction:** On startup, the catalog automatically purges remote catalogs (and local tombstones) that haven't successfully synced in the last 30 days. This prevents unbounded database growth from permanently dead peers or infinite tombstone accumulation. When an evicted peer reconnects, it simply triggers a full sync (`since=0`).
 *   **Conflict Resolution:** For user data (`rating`, `play_count`), the highest `last_played` timestamp wins, ensuring offline plays sync safely across devices.
@@ -318,9 +319,9 @@ To guarantee minimal data transfer, the SQLite database is **never** transferred
 *   The `PlayerController` state (Queue, Now Playing, Volume) belongs to the **Playback Target**.
 *   **Independent Queues:** A PC and a Phone maintain independent queues by default.
 *   **Remote Control:** The UI can switch its active "Zone". If the Phone selects the PC Zone, the Phone UI forwards all `PlayerIntent` keypresses over WebSocket to the PC.
-*   **Zone Cycling:** `z` in the TUI cycles the active zone through the discovered peers (sorted by instance id), wrapping back to local. Switching zones resets the remote state; the zone client thread reconnects and requests a status snapshot from the new target.
+*   **Zone Cycling:** `z` in the TUI cycles the active zone through the discovered peers (sorted by instance id), wrapping back to local. Switching zones resets the remote state; the zone client thread reconnects and requests a status snapshot from the new target. While a remote zone is active, the client keeps retrying the connection (5 s backoff) if the target is unreachable, so a transient network drop does not silently kill remote control.
 *   **Remote UI State:** While a zone is active, the TUI renders the remote target's state instead of the local one: Now Playing, queue (explicit + dynamic), volume, play/pause, position, and stop-after come from the target's `ControlResponse` (polled over the WebSocket). Seek and stop-after intents are forwarded like any other keypress. Local playback is left untouched; switching back to local restores the local view.
-*   **Zone Handoff:** `T` (Shift+T) transfers the active session to the next zone. The UI pauses the current zone, cycles to the next peer, and sends a `RestoreSnapshot` intent carrying the exact queue, track, position, and play state. This achieves seamless multi-room handoff.
+*   **Zone Handoff:** `T` (Shift+T) transfers the active session to the next zone. The UI pauses the current zone, cycles to the next peer, and hands a `RestoreSnapshot` intent (exact queue, track, position, and play state) to the zone client, which sends it once the connection to the new target is (re)established. This achieves seamless multi-room handoff.
 *   **Scrobbling:** Only the active Playback Target executes scrobbles, preventing duplicated API calls.
 
 ### 8.5. Audio Streaming & UI Indicators
