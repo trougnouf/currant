@@ -387,6 +387,10 @@ pub struct App {
     sel_queue: usize,
     sel_playlists: usize,
     queue_rows: Vec<QueueRow>,
+    /// The (current, explicit, dynamic) queue ids from the last time
+    /// `queue_rows` was built; frames with unchanged ids skip the
+    /// per-row lookups.
+    queue_key: (Option<String>, Vec<String>, Vec<String>),
 
     /// Expanded album/artist view: the selected album/artist's tracks.
     expanded: Option<ExpandedView>,
@@ -399,6 +403,9 @@ pub struct App {
     pub is_playing: bool,
     pub stop_after: Option<String>,
     pub track_count: u64,
+    /// When `track_count` was last computed; it's a full table scan, so it
+    /// is recomputed when dirty or at most once a second.
+    last_count_at: Instant,
     pub radio_sort: Option<SortPreset>,
     pub volume: f32,
     pub smart_playlists: Vec<SmartPlaylist>,
@@ -471,12 +478,14 @@ impl App {
             sel_queue: 0,
             sel_playlists: 0,
             queue_rows: Vec::new(),
+            queue_key: (None, Vec::new(), Vec::new()),
             expanded: None,
             prev_playing_id: None,
             now_playing: None,
             is_playing: false,
             stop_after: None,
             track_count: 0,
+            last_count_at: Instant::now(),
             radio_sort: None,
             volume: 1.0,
             smart_playlists: Vec::new(),
@@ -545,7 +554,12 @@ impl App {
                 self.is_playing = rs.is_playing;
                 self.volume = rs.volume;
                 self.stop_after = rs.stop_after.clone();
-                self.refresh_queue_from_snapshot(&rs.queue, &c.store);
+                self.refresh_queue_if_changed(
+                    &rs.queue.current_track,
+                    &rs.queue.explicit_queue,
+                    &rs.queue.dynamic_queue,
+                    &c.store,
+                );
                 using_remote = true;
             }
         }
@@ -555,11 +569,20 @@ impl App {
             self.is_playing = c.is_playing;
             self.stop_after = c.stop_after.clone();
             self.volume = c.volume;
-            let snap = c.queue_snapshot();
-            self.refresh_queue_from_snapshot(&snap, &c.store);
+            self.refresh_queue_if_changed(
+                &c.current_track,
+                &c.explicit_queue,
+                &c.dynamic_queue,
+                &c.store,
+            );
         }
 
-        self.track_count = c.store.track_count();
+        // The catalog only changes on scan or sync; counting every frame is
+        // a full table scan. Recompute when dirty, or at most once a second.
+        if self.dirty || self.last_count_at.elapsed() >= Duration::from_secs(1) {
+            self.track_count = c.store.track_count();
+            self.last_count_at = Instant::now();
+        }
         self.radio_sort = Some(c.dynamic_sort());
         self.smart_playlists = c.smart_playlists().to_vec();
 
@@ -660,13 +683,23 @@ impl App {
         }
     }
 
-    fn refresh_queue_from_snapshot(
+    /// Rebuild the queue rows, skipping the per-row lookups when the queue
+    /// ids are unchanged since the last frame.
+    fn refresh_queue_if_changed(
         &mut self,
-        snap: &currant_core::model::QueueSnapshot,
+        current: &Option<String>,
+        explicit: &[String],
+        dynamic: &[String],
         store: &LibraryStore,
     ) {
+        if current == &self.queue_key.0
+            && explicit == self.queue_key.1
+            && dynamic == self.queue_key.2
+        {
+            return;
+        }
         let mut rows = Vec::new();
-        if let Some(id) = &snap.current_track
+        if let Some(id) = current
             && let Some(t) = store.get_track(id)
         {
             rows.push(QueueRow {
@@ -676,7 +709,7 @@ impl App {
                 kind: QueueKind::NowPlaying,
             });
         }
-        for id in &snap.explicit_queue {
+        for id in explicit {
             let (title, artist) = store
                 .get_track(id)
                 .map(|t| (t.title, t.artist))
@@ -688,7 +721,7 @@ impl App {
                 kind: QueueKind::Explicit,
             });
         }
-        for id in &snap.dynamic_queue {
+        for id in dynamic {
             let (title, artist) = store
                 .get_track(id)
                 .map(|t| (t.title, t.artist))
@@ -702,6 +735,7 @@ impl App {
         }
         self.sel_queue = self.sel_queue.min(rows.len().saturating_sub(1));
         self.queue_rows = rows;
+        self.queue_key = (current.clone(), explicit.to_vec(), dynamic.to_vec());
     }
 
     fn refresh_playlists(&mut self) {
