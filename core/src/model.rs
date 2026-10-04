@@ -249,11 +249,6 @@ pub enum PlayerIntent {
         id: String,
         up: bool,
     },
-
-    // Library
-    ScanLibrary {
-        roots: Vec<String>,
-    },
 }
 
 /// A snapshot of the live queue, persisted so the session resumes cleanly.

@@ -48,6 +48,11 @@ impl HttpSeekableReader {
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
                 .timeout_global(Some(Duration::from_secs(30)))
+                // Fail fast on dead peers: mDNS may not have noticed a peer
+                // leave yet, and a connect that takes longer than this means
+                // the audio thread should move on to the next source instead
+                // of waiting out the OS connect timeout.
+                .timeout_connect(Some(Duration::from_secs(5)))
                 .tls_config(tls_config)
                 .build(),
         );

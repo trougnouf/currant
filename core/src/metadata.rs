@@ -73,14 +73,19 @@ pub fn write_rating_and_play_count(path: &Path, rating: u8, play_count: u32) -> 
 /// A temporary file in the same directory as `path`, so the final rename is
 /// atomic (same filesystem). The original extension is preserved so the
 /// format can still be identified from the name (lofty's `Probe` guesses the
-/// file type from the extension).
+/// file type from the extension). The name carries a unique suffix: tag
+/// writes for the same file can run concurrently (a rating landing while the
+/// play-count write is still in flight), and a shared temp path would let
+/// the two writes clobber each other.
 fn temp_path_for(path: &Path) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut name = format!(".{stem}.currant-tmp");
+    let mut name = format!(".{stem}.currant-tmp-{}-{}", std::process::id(), n);
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         name.push('.');
         name.push_str(ext);

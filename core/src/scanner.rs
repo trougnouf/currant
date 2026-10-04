@@ -67,9 +67,16 @@ pub struct ScanReport {
     pub errors: u64,
 }
 
+/// Serializes concurrent scans (watcher-triggered vs. manual vs. startup).
+/// Two overlapping scans race on prune: the slower one's `keep` set predates
+/// the other's inserts and would delete freshly added tracks. A blocked scan
+/// re-walks the roots fresh once the first finishes, so nothing is lost.
+static SCAN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Scan `roots`, updating `store` incrementally. Live counts are written to
 /// `progress` so a UI can show feedback while the scan runs.
 pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgress) {
+    let _guard = SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let existing = store.local_paths_info();
     let mut keep: HashSet<(String, String)> = HashSet::new();
 
@@ -84,7 +91,9 @@ pub fn scan_roots(store: &LibraryStore, roots: &[String], progress: &ScanProgres
         }
         for entry in WalkDir::new(root)
             .into_iter()
-            .filter_entry(|e| !is_hidden(e.path()))
+            // A dot-named root (e.g. `~/.music`) is scanned; only hidden
+            // entries *inside* it are skipped.
+            .filter_entry(|e| e.depth() == 0 || !is_hidden(e.path()))
             .filter_map(|e| e.ok())
         {
             let path = entry.path();

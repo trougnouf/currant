@@ -254,10 +254,10 @@ pub fn spawn(
             };
 
             // Recompute the ReplayGain multiplier when the track or the
-            // setting changes (covers mid-track toggles).
-            let key = (current.clone(), rg_enabled);
-            if key != rg_key {
-                rg_key = key;
+            // setting changes (covers mid-track toggles). Compare by
+            // reference so the loop doesn't allocate a String every tick.
+            if current.as_ref() != rg_key.0.as_ref() || rg_enabled != rg_key.1 {
+                rg_key = (current.clone(), rg_enabled);
                 current_rg_multiplier = if rg_enabled {
                     current
                         .as_deref()

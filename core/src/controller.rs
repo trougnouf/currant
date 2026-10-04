@@ -6,7 +6,6 @@
 
 use crate::matcher::{self, SearchExpr};
 use crate::model::{PlayerIntent, QueueSnapshot, SmartPlaylist, SortPreset, Track};
-use crate::scanner::scan_roots;
 use crate::scrobble::{NoopScrobbler, ScrobbleEvent, Scrobbler};
 use crate::store::LibraryStore;
 use std::collections::HashSet;
@@ -182,11 +181,13 @@ impl PlayerController {
         let now = unix_now();
         self.store.increment_play_count(id, now);
         if let Some(track) = self.store.get_track(id) {
-            let _ = crate::metadata::write_rating_and_play_count(
-                Path::new(&track.path),
-                track.rating,
-                track.play_count.saturating_add(1),
-            );
+            if track.is_local {
+                write_tags_async(
+                    track.path.clone(),
+                    track.rating,
+                    track.play_count.saturating_add(1),
+                );
+            }
             self.scrobbler.report(&track, ScrobbleEvent::NowPlaying);
         }
     }
@@ -362,12 +363,10 @@ impl PlayerController {
             PlayerIntent::RateTrack { id, rating } => {
                 let rating = rating.min(5);
                 self.store.update_rating(&id, rating);
-                if let Some(track) = self.store.get_track(&id) {
-                    let _ = crate::metadata::write_rating_and_play_count(
-                        Path::new(&track.path),
-                        rating,
-                        track.play_count,
-                    );
+                if let Some(track) = self.store.get_track(&id)
+                    && track.is_local
+                {
+                    write_tags_async(track.path.clone(), rating, track.play_count);
                 }
             }
             PlayerIntent::IncrementPlayCount { id } => {
@@ -406,11 +405,6 @@ impl PlayerController {
                         self.store.save_smart_playlists(&self.smart_playlists);
                     }
                 }
-            }
-            PlayerIntent::ScanLibrary { roots } => {
-                self.store.save_roots(&roots);
-                let progress = crate::scanner::ScanProgress::default();
-                scan_roots(&self.store, &roots, &progress);
             }
         }
     }
@@ -502,6 +496,16 @@ impl PlayerController {
             }
         }
     }
+}
+
+/// Write the tag off the controller lock. The rewrite copies the whole file
+/// to a temp path and re-parses it to verify, which takes seconds for large
+/// files; doing it inline would freeze every UI lock for that duration. The
+/// catalog is the source of truth, so a dropped or stale tag write is fine.
+fn write_tags_async(path: String, rating: u8, play_count: u32) {
+    std::thread::spawn(move || {
+        let _ = crate::metadata::write_rating_and_play_count(Path::new(&path), rating, play_count);
+    });
 }
 
 fn unix_now() -> i64 {
