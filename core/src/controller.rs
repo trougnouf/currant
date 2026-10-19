@@ -70,6 +70,10 @@ pub struct PlayerController {
     pub volume: f32,
     pub replaygain: bool,
 
+    /// Bumped whenever user data (rating, play count) changes, so frontends
+    /// can refresh cached list rows without a structural reload.
+    pub user_data_revision: u64,
+
     /// When set, `repopulate_dynamic_queue` skips album continuation for this
     /// (album_artist, album) pair. Set by `SkipAlbum`, cleared by `set_current`.
     skip_album: Option<(String, String)>,
@@ -99,6 +103,7 @@ impl PlayerController {
             is_playing: false,
             volume: 1.0,
             replaygain,
+            user_data_revision: 0,
             skip_album: None,
             dynamic_query: SearchExpr::Str(
                 crate::model::Field::All,
@@ -180,6 +185,7 @@ impl PlayerController {
     pub fn on_track_started(&mut self, id: &str) {
         let now = unix_now();
         self.store.increment_play_count(id, now);
+        self.user_data_revision = self.user_data_revision.wrapping_add(1);
         if let Some(track) = self.store.get_track(id) {
             if track.is_local {
                 write_tags_async(
@@ -363,6 +369,7 @@ impl PlayerController {
             PlayerIntent::RateTrack { id, rating } => {
                 let rating = rating.min(5);
                 self.store.update_rating(&id, rating);
+                self.user_data_revision = self.user_data_revision.wrapping_add(1);
                 if let Some(track) = self.store.get_track(&id)
                     && track.is_local
                 {
@@ -750,11 +757,13 @@ mod tests {
     fn rating_persists_to_catalog() {
         let store = make_store();
         let mut c = PlayerController::new(store.clone());
+        let before = c.user_data_revision;
         c.dispatch(PlayerIntent::RateTrack {
             id: "1".into(),
             rating: 4,
         });
         assert_eq!(store.get_track("1").unwrap().rating, 4);
+        assert_eq!(c.user_data_revision, before + 1);
     }
 
     #[test]

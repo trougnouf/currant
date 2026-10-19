@@ -27,7 +27,7 @@ Currant is a fast offline music player with a Rust core and thin frontends (TUI 
 ### 1.3. Performance
 
 *   The UI must never lag, even with 100,000+ tracks.
-*   Queries are paginated (800-track window). The window reloads only when the selection scrolls outside it.
+*   Queries are paginated (800-track window). The window reloads only when the selection scrolls outside it, or when user data (rating, play count) changes — signalled by the controller's `user_data_revision` — in which case it reloads in place, keeping the offset and selection.
 *   The cursor is centered vertically in the list area.
 *   SQLite indexes on artist, album, title, genre, year, path, and a composite index on (album_artist_fold, album_fold, track_number, title_fold) for the default sort. Sort uses pre-folded shadow columns so ordering is accent- and case-insensitive, matching search.
 *   The read connection serves the pre-scan catalog state via WAL while the scan thread writes.

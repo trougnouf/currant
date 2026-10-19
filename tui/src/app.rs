@@ -102,6 +102,10 @@ pub struct ExpandedView {
     pub drilled: bool,
     pub selection: usize,
     pub label: String,
+    /// Identity of the drilled album, to re-fetch its tracks when user data
+    /// (rating, play count) changes.
+    pub album_artist: String,
+    pub album: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,6 +363,16 @@ impl WindowedView {
         }
     }
 
+    /// Reload the window in place, keeping the current offset and selection.
+    /// Used when user data (rating, play count) changes without a structural
+    /// change to the result set.
+    fn reload(&mut self, store: &LibraryStore, expr: &matcher::SearchExpr, sort: SortPreset) {
+        let page = store.filter(expr, sort, Self::WINDOW, self.offset as u32);
+        self.items = page.tracks;
+        self.total = page.total;
+        self.clamp();
+    }
+
     fn list_index(&self) -> usize {
         self.selection.saturating_sub(self.offset)
     }
@@ -412,6 +426,11 @@ pub struct App {
 
     /// Shared playback state (position + seek channel) with the audio thread.
     playback: Option<Arc<currant_core::controller::PlaybackState>>,
+
+    /// Last seen `PlayerController::user_data_revision`. A change means
+    /// rating or play-count data changed and the cached windows need an
+    /// in-place reload.
+    user_data_rev: u64,
 
     /// True when `g` was pressed and we expect a digit to activate a playlist.
     pending_g: bool,
@@ -490,6 +509,7 @@ impl App {
             volume: 1.0,
             smart_playlists: Vec::new(),
             playback: None,
+            user_data_rev: 0,
             pending_g: false,
             last_mouse_click: None,
             scan_progress: None,
@@ -627,6 +647,20 @@ impl App {
             Tab::Artists => self.refresh_artists(&c.store, &expr),
             Tab::Queue => {} // Queues are handled globally via snapshot above
             Tab::Playlists => self.refresh_playlists(),
+        }
+        // User data (rating, play count) changed through any dispatch path
+        // (keys, control socket, track start). Reload the windowed views in
+        // place — same offset, same selection — so rows don't stay stale
+        // until the selection scrolls out of the loaded window.
+        if c.user_data_revision != self.user_data_rev {
+            self.user_data_rev = c.user_data_revision;
+            self.tracks.reload(&c.store, &expr, self.sort);
+            self.files.reload(&c.store, &expr, SortPreset::Path);
+            if let Some(e) = &mut self.expanded
+                && e.drilled
+            {
+                e.tracks = c.store.album_tracks(&e.album_artist, &e.album);
+            }
         }
         // Collapse expanded view if the underlying album/artist list was
         // invalidated (new search, sort change, etc.).
@@ -2120,6 +2154,8 @@ impl App {
                     e.tracks = tracks;
                     e.drilled = true;
                     e.selection = 0;
+                    e.album_artist = a.artist;
+                    e.album = a.album;
                     self.scroll_offset = 0;
                     self.follow = true;
                     self.status = "v: album tracks (v to collapse)".into();
@@ -2146,6 +2182,8 @@ impl App {
                         drilled: true,
                         selection: 0,
                         label,
+                        album_artist: a.artist,
+                        album: a.album,
                     });
                     self.scroll_offset = 0;
                     self.follow = true;
@@ -2163,6 +2201,8 @@ impl App {
                         drilled: false,
                         selection: 0,
                         label,
+                        album_artist: String::new(),
+                        album: String::new(),
                     });
                     self.scroll_offset = 0;
                     self.follow = true;
