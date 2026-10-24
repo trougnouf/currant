@@ -198,6 +198,7 @@ pub fn start_network(
     );
 
     let loop_store = store.clone();
+    let bus = controller.lock().unwrap().error_bus.clone();
     thread::spawn(move || {
         let mut receiver = receiver;
         loop {
@@ -317,7 +318,7 @@ pub fn start_network(
             // The browse channel closed: the mDNS daemon thread died. Rebuild
             // the daemon and re-register so discovery keeps working. The daemon
             // thread outlives its handle, so the handle is dropped here.
-            eprintln!("currant: mDNS daemon exited, restarting");
+            bus.push("mDNS daemon exited, restarting".to_string());
             match ServiceDaemon::new().and_then(|daemon| {
                 daemon
                     .register(service_info.clone())
@@ -327,7 +328,7 @@ pub fn start_network(
                     receiver = rx;
                 }
                 Err(e) => {
-                    eprintln!("currant: mDNS restart failed: {e}");
+                    bus.push(format!("mDNS restart failed: {e}"));
                     thread::sleep(std::time::Duration::from_secs(5));
                 }
             }

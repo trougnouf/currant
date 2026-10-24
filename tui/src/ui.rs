@@ -712,15 +712,27 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         np_area[1],
     );
 
-    let status = if app.status.is_empty() {
-        tab_hint(app.tab)
+    if let Some(err) = &app.last_error {
+        // Background errors (audio stream, network, control socket) take
+        // over the status line until Esc clears them.
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("error: {err}"),
+                Style::default().fg(Color::Red).bold(),
+            ))),
+            chunks[1],
+        );
     } else {
-        app.status.clone()
-    };
-    f.render_widget(
-        Paragraph::new(status).style(Style::default().fg(theme::HINT)),
-        chunks[1],
-    );
+        let status = if app.status.is_empty() {
+            tab_hint(app.tab)
+        } else {
+            app.status.clone()
+        };
+        f.render_widget(
+            Paragraph::new(status).style(Style::default().fg(theme::HINT)),
+            chunks[1],
+        );
+    }
 }
 
 /// Context-sensitive keybinding hint for the bottom status line.
@@ -792,7 +804,10 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         ("T", "transfer playback to the next zone"),
         ("Ctrl+J", "jump to currently playing track in the list"),
         ("q", "quit"),
-        ("Esc", "close overlays / collapse / clear search"),
+        (
+            "Esc",
+            "close overlays / collapse / clear search / clear errors",
+        ),
     ];
     for (key, desc) in bindings {
         text.push_str(&format!("{key:<20} {desc}\n"));

@@ -35,7 +35,11 @@ pub fn spawn(controller: Arc<Mutex<PlayerController>>) {
         let listener = match bind(&path) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("currant: control socket failed at {}: {e}", path.display());
+                controller
+                    .lock()
+                    .unwrap()
+                    .error_bus
+                    .push(format!("control socket failed at {}: {e}", path.display()));
                 return;
             }
         };

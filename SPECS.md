@@ -218,7 +218,7 @@ Metadata is read and written by lofty 0.25.
 | `J` `K` | move playlist down / up (playlists tab) |
 | `?` | help overlay (keybindings, search syntax, playlists, about/support) — scroll with j/k/arrows/PgUp/PgDn |
 | `q` / `Ctrl+C` | quit |
-| `Esc` | close help / details overlay, exit search mode |
+| `Esc` | close help / details overlay, exit search mode, clear errors |
 
 ### 6.3. View presets
 
@@ -241,6 +241,10 @@ Opened with `o` as a centered overlay. It lists the editable settings as rows: o
 *   **ReplayGain** — (default off) normalizes volume based on ReplayGain tags.
 *   **Watch roots** — (default off) monitors scan roots for file system changes and auto-rescans.
 *   **Live columns** — (default off) skips the column-width debounce so widths follow the visible rows in real time while scrolling.
+
+### 6.5. Error display
+
+Background threads (audio stream, mesh network, control socket) report errors through the controller's `ErrorBus` — a capped thread-safe message queue — instead of writing to stderr, which would corrupt the terminal while the TUI owns it. The TUI drains the bus each frame and shows the latest error in red in the bottom status line, in place of the key hint, until `Esc` clears it.
 
 ---
 

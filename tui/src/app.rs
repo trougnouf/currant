@@ -385,6 +385,9 @@ pub struct App {
     pub sort: SortPreset,
     pub view: ViewPreset,
     pub status: String,
+    /// Latest error reported by a background thread (audio stream, network,
+    /// control socket). Shown in the status line until cleared with Esc.
+    pub last_error: Option<String>,
     pub help: bool,
     pub help_scroll: u16,
     pub help_lines: usize,
@@ -482,6 +485,7 @@ impl App {
             sort: SortPreset::ArtistAlbumTrack,
             view: ViewPreset::Full,
             status: String::new(),
+            last_error: None,
             help: false,
             help_scroll: 0,
             help_lines: 0,
@@ -559,6 +563,16 @@ impl App {
             && let Ok(p) = rx.try_recv()
         {
             self.scan_progress = Some(p);
+        }
+
+        // Surface background errors (audio stream, network, control socket)
+        // in the status line; raw stderr writes would corrupt the TUI.
+        if let Some(msg) = c.error_bus.drain().pop() {
+            // Identical repeats (e.g. repeated stream overruns) keep the
+            // existing message so the line doesn't churn.
+            if self.last_error.as_deref() != Some(msg.as_str()) {
+                self.last_error = Some(msg);
+            }
         }
 
         let expr = parse_query(&self.search);
@@ -1254,6 +1268,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Esc => {
+                self.last_error = None;
                 if self.help {
                     self.help = false;
                 } else if self.expanded.is_some() {

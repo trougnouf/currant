@@ -8,10 +8,10 @@ use crate::matcher::{self, SearchExpr};
 use crate::model::{PlayerIntent, QueueSnapshot, SmartPlaylist, SortPreset, Track};
 use crate::scrobble::{NoopScrobbler, ScrobbleEvent, Scrobbler};
 use crate::store::LibraryStore;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Shared playback position + seek channel between the audio thread and the
 /// UI. Position is in milliseconds; the audio thread writes it every loop
@@ -54,6 +54,33 @@ impl PlaybackState {
     }
 }
 
+/// Thread-safe message bus for background threads (audio stream, network,
+/// control socket) to report errors to the frontend. Frontends own the
+/// terminal, so raw `eprintln!` writes would corrupt the screen; errors are
+/// pushed here and displayed by the frontend (the TUI shows the latest in
+/// its status line).
+#[derive(Default)]
+pub struct ErrorBus {
+    messages: Mutex<VecDeque<String>>,
+}
+
+impl ErrorBus {
+    /// Record an error. The bus is capped so a misbehaving thread cannot
+    /// grow it without bound when the frontend is not draining.
+    pub fn push(&self, message: impl Into<String>) {
+        let mut m = self.messages.lock().unwrap();
+        m.push_back(message.into());
+        while m.len() > 16 {
+            m.pop_front();
+        }
+    }
+
+    /// Take all pending messages, oldest first.
+    pub fn drain(&self) -> Vec<String> {
+        self.messages.lock().unwrap().drain(..).collect()
+    }
+}
+
 /// How many tracks the dynamic queue pre-fetches at a time.
 const DYNAMIC_BATCH: u32 = 50;
 /// Cap on history kept for "previous" and de-duplication.
@@ -87,6 +114,10 @@ pub struct PlayerController {
     smart_playlists: Vec<SmartPlaylist>,
 
     pub playback_state: Arc<PlaybackState>,
+
+    /// Shared error bus: background threads push errors here, frontends
+    /// display them.
+    pub error_bus: Arc<ErrorBus>,
 }
 
 impl PlayerController {
@@ -114,6 +145,7 @@ impl PlayerController {
             scrobbler: Arc::new(NoopScrobbler),
             smart_playlists,
             playback_state: Arc::new(PlaybackState::new()),
+            error_bus: Arc::new(ErrorBus::default()),
         }
     }
 
@@ -814,5 +846,22 @@ mod tests {
         if let Some(id) = &next {
             assert_eq!(c.store.get_track(id).unwrap().album, "y");
         }
+    }
+
+    #[test]
+    fn error_bus_pushes_drains_and_caps() {
+        let bus = ErrorBus::default();
+        assert!(bus.drain().is_empty());
+        bus.push("first");
+        bus.push("second");
+        assert_eq!(bus.drain(), vec!["first".to_string(), "second".to_string()]);
+        assert!(bus.drain().is_empty());
+        for i in 0..20 {
+            bus.push(format!("msg {i}"));
+        }
+        let msgs = bus.drain();
+        assert_eq!(msgs.len(), 16);
+        assert_eq!(msgs.first().map(String::as_str), Some("msg 4"));
+        assert_eq!(msgs.last().map(String::as_str), Some("msg 19"));
     }
 }

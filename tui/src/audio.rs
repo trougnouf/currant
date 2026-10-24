@@ -4,8 +4,7 @@
 //! playback from the controller's live queue. Opus falls back to the bundled
 //! libopus decoder; everything else is decoded by symphonia via rodio.
 
-use currant_core::controller::PlaybackState;
-use currant_core::controller::PlayerController;
+use currant_core::controller::{ErrorBus, PlaybackState, PlayerController};
 use currant_core::model::{PlayerIntent, Track};
 use currant_core::net::NetworkState;
 use currant_core::net::stream::{HttpSeekableReader, Seekable};
@@ -71,6 +70,7 @@ fn open_source(
     track: &Track,
     store: &LibraryStore,
     network: &Arc<Mutex<NetworkState>>,
+    bus: &ErrorBus,
 ) -> Option<Box<dyn Source<Item = f32> + Send>> {
     let mut candidates: Vec<(String, ReaderFactory)> = Vec::new();
 
@@ -131,7 +131,7 @@ fn open_source(
         }
     }
 
-    eprintln!("failed to open track {}: {}", track.id, track.path);
+    bus.push(format!("failed to open track {}: {}", track.id, track.path));
     None
 }
 
@@ -161,7 +161,9 @@ pub fn spawn(
             (Some(channels), Some(sample_rate)) => rodio::mixer::mixer(channels, sample_rate),
             _ => return,
         };
-        let err_fn = |err| eprintln!("audio stream error: {err}");
+        let bus = controller.lock().unwrap().error_bus.clone();
+        let err_bus = bus.clone();
+        let err_fn = move |err| err_bus.push(format!("audio stream error: {err}"));
 
         // Feed the mixer output into a raw cpal stream so we keep ownership
         // of the stream and can cork it at the OS level while paused.
@@ -341,7 +343,7 @@ pub fn spawn(
                     let track = store.get_track(id);
                     match track
                         .as_ref()
-                        .and_then(|t| open_source(t, &store, &network))
+                        .and_then(|t| open_source(t, &store, &network, &bus))
                     {
                         Some(src) => {
                             let dur = track.as_ref().map(|t| t.duration_secs).unwrap_or(0);
