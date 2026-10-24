@@ -132,7 +132,7 @@ Evaluated instantly during search input. Compiles to SQL `WHERE` clauses over th
 
 *   The audio thread publishes the playback position in milliseconds via a shared `PlaybackState` (lock-free atomics) owned by the `PlayerController` in core. The UI reads it each frame; the control protocol reports it in `ControlResponse`.
 *   Seeking is requested through the same `PlaybackState`: `SeekTo` is resolved by the controller, which stores the target in milliseconds, and the audio thread applies it with `Player::try_seek`. rodio defers the seek until the source is polled next, which does not happen while the stream is corked; a seek that arrives while paused or before a track is loaded is remembered and applied on resume or once the new track starts. The UI reports the seek target as the position immediately.
-*   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
+*   Symphonia-decoded formats (FLAC, MP3, OGG/Vorbis, WAV, M4A/AAC/ALAC) seek natively via rodio. Opus files seek by adjusting the sample offset in the pre-decoded buffer.
 *   The now-playing bar shows `position / duration` and a progress bar (Gauge widget).
 *   ReplayGain is supported and applied at playback time. When enabled, it calculates a volume multiplier using `REPLAYGAIN_TRACK_GAIN` metadata tags extracted by lofty right before playback.
 
@@ -171,6 +171,7 @@ All frontends fire `PlayerIntent` into the controller:
 | FLAC | symphonia via rodio | |
 | OGG/Vorbis | symphonia via rodio | |
 | WAV | symphonia via rodio | |
+| M4A (AAC/ALAC) | symphonia via rodio | MP4 demuxer + AAC/ALAC codecs; EAC3 (Dolby Digital Plus) in MP4 is not supported by symphonia and fails to open |
 | Opus | libopus (opt-in `opus` feature) | rodio's symphonia 0.5 has no opus codec; bundled libopus decoder with seek support |
 
 Metadata is read and written by lofty 0.25.

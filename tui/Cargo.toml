@@ -16,12 +16,14 @@ ratatui = "0.30"
 crossterm = "0.29"
 dirs = "7"
 unicode-width = "0.2"
-# rodio uses symphonia internally to decode flac/mp3/ogg(vorbis)/wav.
+# rodio uses symphonia internally to decode flac/mp3/ogg(vorbis)/wav/m4a.
 # symphonia-ogg is the OGG container demuxer — without it symphonia can open
 # neither OGG/Vorbis nor OGG/Opus files.
 # symphonia-wav is only the RIFF demuxer; symphonia-pcm adds the PCM codec
 # that decodes the samples — without it every .wav fails to open.
-rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-ogg", "symphonia-wav", "symphonia-pcm"] }
+# symphonia-isomp4 is the MP4 demuxer and symphonia-aac/-alac the codecs
+# inside it — without them every .m4a fails to open.
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-flac", "symphonia-mp3", "symphonia-vorbis", "symphonia-ogg", "symphonia-wav", "symphonia-pcm", "symphonia-isomp4", "symphonia-aac", "symphonia-alac"] }
 ogg = { version = "0.9", optional = true }
 opus = { version = "0.4", optional = true }
 # OS media integration (MPRIS on Linux, SMTC on Windows, Media Remote on macOS).
