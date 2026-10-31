@@ -15,6 +15,7 @@ use rodio::{Decoder, Player, Source};
 use std::fs::File;
 use std::num::NonZero;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -135,6 +136,103 @@ fn open_source(
     None
 }
 
+/// Build the audio output pipeline: the default output device, a cpal stream
+/// fed by a fresh rodio mixer, and a player connected to that mixer. The
+/// stream's error callback sets `broken` so the audio loop can rebuild the
+/// pipeline when the device fails — e.g. ALSA `POLLERR` when a Bluetooth
+/// A2DP sink drops — which cpal does not recover on its own. Returns `None`
+/// when no output device is available or the stream cannot be built.
+fn build_output(
+    host: &rodio::cpal::Host,
+    broken: &Arc<AtomicBool>,
+    bus: &Arc<ErrorBus>,
+) -> Option<(Box<dyn StreamTrait>, Player)> {
+    let device = host.default_output_device()?;
+    let supported_config = device.default_output_config().ok()?;
+    let sample_format = supported_config.sample_format();
+    let config: rodio::cpal::StreamConfig = supported_config.into();
+
+    let (mixer, mut mixer_out) = match (
+        NonZero::new(config.channels),
+        NonZero::new(config.sample_rate),
+    ) {
+        (Some(channels), Some(sample_rate)) => rodio::mixer::mixer(channels, sample_rate),
+        _ => return None,
+    };
+
+    let broken_cb = broken.clone();
+    let bus_cb = bus.clone();
+    let err_fn = move |err| {
+        broken_cb.store(true, Ordering::SeqCst);
+        bus_cb.push(format!("audio stream error: {err}"));
+    };
+
+    // Feed the mixer output into a raw cpal stream so we keep ownership of
+    // the stream and can cork it at the OS level while paused.
+    let stream = match sample_format {
+        rodio::cpal::SampleFormat::F32 => device.build_output_stream(
+            &config,
+            move |data: &mut [f32], _| {
+                for sample in data.iter_mut() {
+                    *sample = mixer_out.next().unwrap_or(0.0);
+                }
+            },
+            err_fn,
+            None,
+        ),
+        rodio::cpal::SampleFormat::I16 => device.build_output_stream(
+            &config,
+            move |data: &mut [i16], _| {
+                for sample in data.iter_mut() {
+                    *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0)
+                        * f32::from(i16::MAX)) as i16;
+                }
+            },
+            err_fn,
+            None,
+        ),
+        rodio::cpal::SampleFormat::U16 => device.build_output_stream(
+            &config,
+            move |data: &mut [u16], _| {
+                for sample in data.iter_mut() {
+                    *sample = ((mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0) + 1.0)
+                        * 0.5
+                        * f32::from(u16::MAX)) as u16;
+                }
+            },
+            err_fn,
+            None,
+        ),
+        rodio::cpal::SampleFormat::I32 => device.build_output_stream(
+            &config,
+            move |data: &mut [i32], _| {
+                for sample in data.iter_mut() {
+                    *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0) * (i32::MAX as f32))
+                        as i32;
+                }
+            },
+            err_fn,
+            None,
+        ),
+        rodio::cpal::SampleFormat::F64 => device.build_output_stream(
+            &config,
+            move |data: &mut [f64], _| {
+                for sample in data.iter_mut() {
+                    *sample = f64::from(mixer_out.next().unwrap_or(0.0));
+                }
+            },
+            err_fn,
+            None,
+        ),
+        _ => return None, // Unsupported sample format
+    }
+    .ok()?;
+
+    let stream: Box<dyn StreamTrait> = Box::new(stream);
+    let player = Player::connect_new(&mixer);
+    Some((stream, player))
+}
+
 /// Spawn the audio thread. It owns the output stream and polls the controller.
 pub fn spawn(
     controller: Arc<Mutex<PlayerController>>,
@@ -143,96 +241,16 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let host = rodio::cpal::default_host();
-        let device = match host.default_output_device() {
-            Some(d) => d,
-            None => return,
-        };
-        let supported_config = match device.default_output_config() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let sample_format = supported_config.sample_format();
-        let config: rodio::cpal::StreamConfig = supported_config.into();
-
-        let (mixer_ctrl, mut mixer_out) = match (
-            NonZero::new(config.channels),
-            NonZero::new(config.sample_rate),
-        ) {
-            (Some(channels), Some(sample_rate)) => rodio::mixer::mixer(channels, sample_rate),
-            _ => return,
-        };
         let bus = controller.lock().unwrap().error_bus.clone();
-        let err_bus = bus.clone();
-        let err_fn = move |err| err_bus.push(format!("audio stream error: {err}"));
 
-        // Feed the mixer output into a raw cpal stream so we keep ownership
-        // of the stream and can cork it at the OS level while paused.
-        let stream = match sample_format {
-            rodio::cpal::SampleFormat::F32 => device.build_output_stream(
-                &config,
-                move |data: &mut [f32], _| {
-                    for sample in data.iter_mut() {
-                        *sample = mixer_out.next().unwrap_or(0.0);
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            rodio::cpal::SampleFormat::I16 => device.build_output_stream(
-                &config,
-                move |data: &mut [i16], _| {
-                    for sample in data.iter_mut() {
-                        *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0)
-                            * f32::from(i16::MAX)) as i16;
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            rodio::cpal::SampleFormat::U16 => device.build_output_stream(
-                &config,
-                move |data: &mut [u16], _| {
-                    for sample in data.iter_mut() {
-                        *sample = ((mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0) + 1.0)
-                            * 0.5
-                            * f32::from(u16::MAX)) as u16;
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            rodio::cpal::SampleFormat::I32 => device.build_output_stream(
-                &config,
-                move |data: &mut [i32], _| {
-                    for sample in data.iter_mut() {
-                        *sample = (mixer_out.next().unwrap_or(0.0).clamp(-1.0, 1.0)
-                            * (i32::MAX as f32)) as i32;
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            rodio::cpal::SampleFormat::F64 => device.build_output_stream(
-                &config,
-                move |data: &mut [f64], _| {
-                    for sample in data.iter_mut() {
-                        *sample = f64::from(mixer_out.next().unwrap_or(0.0));
-                    }
-                },
-                err_fn,
-                None,
-            ),
-            _ => return, // Unsupported sample format
-        };
-        let stream = match stream {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        if stream.play().is_err() {
-            return;
-        }
-
-        let player = Player::connect_new(&mixer_ctrl);
+        // The output pipeline (device + cpal stream + mixer + player) is built
+        // once and torn down and rebuilt whenever the stream reports an error.
+        // cpal does not recover a broken stream on its own — e.g. ALSA
+        // POLLERR when a Bluetooth A2DP sink drops — so without this the only
+        // remedy is restarting the player.
+        let broken = Arc::new(AtomicBool::new(false));
+        let mut stream: Option<Box<dyn StreamTrait>> = None;
+        let mut player: Option<Player> = None;
 
         let mut playing_id: Option<String> = None;
         let mut threshold: Option<Duration> = Some(Duration::from_secs(30));
@@ -245,6 +263,67 @@ pub fn spawn(
         let mut stream_paused = false;
 
         loop {
+            // Build or rebuild the output pipeline. `broken` is set by the
+            // stream's error callback; `stream.is_none()` covers the first
+            // pass and a failed build we are retrying.
+            if stream.is_none() || broken.swap(false, Ordering::SeqCst) {
+                let is_rebuild = stream.is_some();
+                drop(stream.take());
+                drop(player.take());
+                match build_output(&host, &broken, &bus) {
+                    Some((s, p)) => {
+                        let is_playing = controller.lock().unwrap().is_playing;
+                        if s.play().is_err() || (!is_playing && s.pause().is_err()) {
+                            // The stream could not be started. Drop it and
+                            // retry after a pause so a transient device
+                            // hiccup — or a Bluetooth speaker that is still
+                            // connecting — is picked up without a restart.
+                            thread::sleep(Duration::from_secs(2));
+                            continue;
+                        }
+                        if is_rebuild {
+                            // Re-open the current source on the fresh player
+                            // and resume where the user left off, so a
+                            // transient device drop does not restart the
+                            // track from the top.
+                            if let Some(id) = &playing_id {
+                                let store = controller.lock().unwrap().store.clone();
+                                if let Some(track) = store.get_track(id)
+                                    && let Some(src) = open_source(&track, &store, &network, &bus)
+                                {
+                                    let pos = state.position_ms();
+                                    p.append(src);
+                                    if pos > 0 {
+                                        let _ = p.try_seek(Duration::from_millis(pos));
+                                    }
+                                    if is_playing {
+                                        p.play();
+                                    } else {
+                                        p.pause();
+                                    }
+                                }
+                            }
+                        }
+                        stream = Some(s);
+                        player = Some(p);
+                    }
+                    None => {
+                        // No output device (yet) or the stream could not be
+                        // built. Retry after a pause rather than dying, so a
+                        // device that appears later is picked up.
+                        thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                }
+            }
+
+            let Some(stream) = stream.as_ref() else {
+                continue;
+            };
+            let Some(player) = player.as_mut() else {
+                continue;
+            };
+
             let (is_playing, current, volume, rg_enabled) = {
                 let c = controller.lock().unwrap();
                 (
